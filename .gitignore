@@ -21,3 +21,6 @@ id_*
 
 # Full-size photos with location data stay local
 docs/build-log/originals/
+
+# Check script output
+cad/check/out/

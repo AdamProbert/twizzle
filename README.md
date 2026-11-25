@@ -29,11 +29,14 @@ The full parts list, including the screws, is in [docs/parts.md](docs/parts.md).
 
 ## Mounting
 
-The wand hangs about 5 cm off the wall and is pulled about 30° to the left. The puck sits on a 60 mm round plinth made of a base and five 5 mm spacers. The spacers have 72 teeth (5° steps), so the puck can be turned to match the wand's angle on the bench, then clamped with one M4 screw through the middle and stuck to the wall with Command strips.
+The wand hangs about 5 cm off the wall and is pulled about 30° to the left. The puck sits on a single 90 mm mount, the same size as the puck, so the whole thing reads as one drum. The mount has 72 ridges round its rim that drop into grooves on the back of the tray (5° steps). Turn the puck to match the wand's angle on the bench, clamp it with one M3 screw from the back of the mount, then stick it to the wall with two Command strips. The USB-C socket lives in the bottom of the mount, so the cable runs down the wall behind it.
+
+To open it up, pull it off the wall (interlocking picture-hanging strips make that easy), take out the centre screw, lift off the mount, and undo the three screws that hold the dome on.
 
 ## What's in here
 
 - `cad/fusion/Twizzle/` is the Fusion 360 script that builds every part. See [docs/printing.md](docs/printing.md) for how to run it, export the STLs and print them.
+- `cad/check/` builds the same parts in CadQuery to check fits, overhangs and print orientation without Fusion.
 - `docs/parts.md` is the parts list.
 - `docs/wiring.md` is the wiring.
 - `docs/printing.md` covers print orientation, settings and the measurements to check.

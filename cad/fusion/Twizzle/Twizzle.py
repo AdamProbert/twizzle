@@ -1,14 +1,19 @@
 """
 Twizzle: Fusion 360 script.
 
-Builds the round-five "Chalk" puck that turns a venetian blind's 7 mm hex tilt
-wand with a 28BYJ-48 stepper, a green ULN2003 board and an ESP32-C3 SuperMini.
+Builds the "Chalk" puck that turns a venetian blind's 7 mm hex tilt wand with a
+28BYJ-48 stepper, a green ULN2003 board and an ESP32-C3 SuperMini, plus the
+90 mm mount that holds it off the wall.
 
 Install: Utilities > Add-Ins > Scripts and Add-Ins > Scripts tab > "+" (or the
 green plus) > pick this folder > select Twizzle > Run.
 It opens a new design and builds every part as its own component, placed in
-its assembled position. Export each printable body as STL (right-click the
-body > Save As Mesh) and use the print orientation listed in the README.
+its assembled position. Each component's name says how to print it. Export
+each printable body as STL (right-click the body > Save As Mesh).
+
+The geometry is written against a small Builder interface, so the same part
+code also runs outside Fusion (cad/check/check.py builds it in CadQuery to
+check fits and overhangs).
 
 All dimensions are millimetres. Values marked MEASURE are best guesses that
 should be checked with calipers before printing.
@@ -17,8 +22,11 @@ should be checked with calipers before printing.
 import math
 import traceback
 
-import adsk.core
-import adsk.fusion
+try:
+    import adsk.core
+    import adsk.fusion
+except ImportError:          # running outside Fusion (cad/check)
+    adsk = None
 
 # ---------------------------------------------------------------------------
 # Parameters (mm)
@@ -27,22 +35,37 @@ import adsk.fusion
 # Printing
 CLEAR = 0.2                 # general sliding clearance per side (PLA/PETG, 0.4 nozzle)
 
+# Fasteners: M3 everywhere, into brass heat-set inserts
+INSERT_D = 4.2              # pocket diameter (PokePi coupon: fitted perfectly)
+INSERT_L = 5.7              # MEASURE: insert length
+INSERT_DEPTH = INSERT_L + 1.0
+INSERT_BOSS_D = 8.4         # boss round an insert pocket (2.1 mm wall)
+M3_CLEAR = 3.4
+M3_HEAD_D = 5.5             # socket head
+M3_HEAD_H = 3.0
+M3_CB_D = 6.2               # counterbore for the head
+M3_CB_SINK = 0.5            # head sits this far below the surface
+
 # Wand (clear acrylic hex)
 WAND_AF = 7.0               # MEASURE: across the flats
-WAND_AC = 8.08              # MEASURE: across the corners (7.0 AF -> 8.08 for a perfect hex)
+WAND_AC = WAND_AF * 2 / math.sqrt(3)   # across the corners (8.08 for a 7.0 hex)
 WAND_FIT = 0.4              # extra on the gear's hex bore so the wand slides through
-WAND_WALL_GAP = 50.0        # centre of the wand to the wall, at the puck (Adam: ~5 cm)
+WAND_PORT_CLEAR = 1.5       # the case never touches the wand: the gear's journals carry it
+WAND_WALL_GAP = 50.0        # centre of the wand to the wall (Adam: ~5 cm)
 
 # Puck body
-PUCK_D = 90.0               # outside diameter
-PUCK_DEPTH = 37.0           # back face to front face
+PUCK_D = 90.0               # outside diameter (the mount matches it)
+PUCK_DEPTH = 37.0           # tray back to dome front
 SHELL = 2.0                 # dome shell thickness
-TRAY_FLOOR = 2.5            # tray back thickness
+TRAY_FLOOR = 3.0            # tray back thickness (index grooves take 1 mm of it)
 TRAY_WALL = 2.0             # tray side wall thickness
 BEVEL = 10.0                # 45 degree front bevel (prints face-down without supports)
 EDGE_ROUND = 3.0            # soft round on the two bevel edges
 WAND_X = -16.0              # wand sits this far left of centre (front view)
-WAND_Z = 19.0               # wand axis height above the back; also the tray/dome split
+WAND_Z = 19.0               # wand axis height above the tray back; also the tray/dome seam
+LIP_H = 3.0                 # dome lip that drops into the tray
+LIP_T = 1.8
+LIP_CLEAR = 0.15
 
 # Gears (1:1 spur)
 GEAR_MODULE = 1.0
@@ -51,6 +74,12 @@ GEAR_FACE = 6.0
 GEAR_ADDENDUM = 0.85        # x module; slightly short teeth print stronger tips
 GEAR_BACKLASH = 0.2
 GEAR_Y = -29.0              # centre of the gear pair along the wand (front view, -y = up)
+HUB_R = 7.5                 # wand gear journals, one each side
+HUB_L = 4.0
+JOURNAL_CLEAR = 0.25        # per side, journal in its bearing
+GEAR_SIDE_GAP = 0.3         # gear to bearing face
+BEARING_WALL = 2.5
+PINION_FIT = 0.1            # added to the D bore (diameter and flats)
 
 # 28BYJ-48 (datasheet values)
 MOTOR_D = 28.0
@@ -58,28 +87,33 @@ MOTOR_LEN = 19.0
 MOTOR_SHAFT_OFFSET = 8.0    # shaft is off the body centre by this much
 MOTOR_SHAFT_D = 5.0
 MOTOR_SHAFT_FLATS = 3.0     # distance across the two flats
-MOTOR_FACE_Y = -23.0        # where the shaft face sits
-TIE_W = 4.0                 # cable-tie slot width (3.6 mm ties fit)
+MOTOR_SHAFT_LEN = 9.0       # MEASURE: motor face to shaft tip (listings say 8 to 10)
+MOTOR_FLAT_LEN = 6.0        # MEASURE: length of the flats at the tip
+MOTOR_BOSS_D = 9.0
+MOTOR_BOSS_H = 1.5
+MOTOR_COVER_W = 16.0        # MEASURE: blue wire cover, width
+MOTOR_COVER_R = 17.0        # MEASURE: can centre to the outside of the blue cover
+MOTOR_COVER_LEN = 17.0      # MEASURE: blue cover, length along the can
+MOTOR_CLEAR = 0.15
 # Snip the two mounting ears off the motor; they would hit the floor and the dome.
+# The motor is clamped between the tray cradle and the dome cap, keyed by its blue cover.
 
 # Green ULN2003 board
 BOARD_W = 35.0              # MEASURE (x)
 BOARD_H = 32.0              # MEASURE (y)
 BOARD_HOLE_DX = 30.0        # MEASURE: hole spacing, centre to centre, along the 35 mm side
 BOARD_HOLE_DY = 27.0        # MEASURE: hole spacing along the 32 mm side
-BOARD_STANDOFF = 6.0        # height above the tray floor (room for solder pins)
+BOARD_HOLE_D = 3.0          # MEASURE: an M3 needs about 3.2
+BOARD_COMP_H = 9.0          # MEASURE: tallest part on the board (header pins / plug)
+BOARD_STANDOFF = 7.0        # floor to the underside of the board
 BOARD_CENTRE = (10.0, 16.0)
 
 # ESP32-C3 SuperMini
 C3_W = 18.0
 C3_H = 22.5
-C3_CENTRE = (-31.0, 0.0)
-
-# USB-C pigtail socket
-USB_W = 15.8                # across the puck edge
-USB_T = 9.3                 # height off the floor
-USB_DEPTH = 11.0            # how far it goes into the puck
-USB_X = -3.0
+C3_T = 4.5                  # board plus its USB-C receptacle
+C3_CENTRE = (-27.0, -2.0)   # under the wand; the wand runs 10 mm above it
+C3_FRAME_H = 3.0
 
 # 12 mm tactile switch with round cap
 SW_BODY = 12.0
@@ -87,38 +121,99 @@ SW_TOTAL_H = 11.0           # MEASURE: bottom of switch body to top of fitted ca
 SW_CAP_D = 12.0             # MEASURE: cap diameter
 SW_CAP_PROUD = 1.0          # how far the cap stands proud of the dome
 SW_POS = (14.0, 22.0)
-
-# Wall mount: base + spacers
-PLINTH_D = 60.0
-SPACER_T = 5.0
-BASE_T = 5.0
-STRIP_T = 2.0               # MEASURE: Command strip thickness when pressed
-TEETH_COUNT = 72            # 5 degree steps
-TOOTH_W = 1.2
-TOOTH_H = 0.8
-TOOTH_R = (22.5, 28.5)
-M4_HOLE = 4.4
-M4_NUT_AF = 7.0
-M4_NUT_T = 3.2
-M4_HEAD_D = 7.6              # button or pan head
-M4_HEAD_H = 3.0
-M3_TAP = 2.5                # hole for an M3 screw to self-tap into plastic
-M3_CLEAR = 3.3
-M3_HEAD_D = 5.5
-M3_HEAD_H = 3.0
 SW_PLUG_T = 3.0             # printed plug that backs the switch so it can't be pushed in
 
+# Dome screws: M3 x 20 from the back of the tray into inserts in the dome
+DOME_SCREWS = [(34.0, 6.0), (-31.0, 15.0), (21.0, -29.0)]
+
+# Wall mount: one 90 mm drum, Command strips on the back, M3 from the back into the tray
+STRIP_T = 2.0               # MEASURE: Command strip pair thickness when pressed
+STRIP_W = 19.0              # MEASURE: Medium picture-hanging strip
+STRIP_L = 70.0              # MEASURE
+STRIP_RECESS = 1.0          # strips sit this deep in the back
+STRIP_Y = 13.0              # strip centre lines, above and below the middle
+MOUNT_WALL = 2.4
+MOUNT_BASE = 3.0
+MOUNT_FLANGE_R = 39.5       # inner edge of the top flange that carries the index ridges
+MOUNT_POST_R = 6.0          # centre post for the clamp screw
+MOUNT_WEB = 3.0             # screw head bears on this, under the tray
+RIDGES = 72                 # 5 degree steps
+RIDGE_R = (41.0, 44.0)
+RIDGE_DEG = 1.8             # ridge width in degrees
+RIDGE_H = 0.8
+WIRE_HOLE = (-20.0, 28.0)   # pigtail wires come up through the tray floor here
+WIRE_HOLE_D = 7.0
+
+# USB-C pigtail socket, pinched between the mount and the tray back
+USB_W = 15.8                # listing: 15.8 x 9.3 x 11 mm black square block, wires out the back
+USB_T = 9.3                 # thickness (pinched between the mount and the tray)
+USB_DEPTH = 11.0            # length, front face to where the wires come out
+USB_PINCH = 0.2             # pocket is this much shallower than the socket
+USB_FACE_T = 1.6            # wall in front of the socket; the plug reaches through a window
+USB_WIN_W = 13.5            # window for a USB-C plug's overmould
+USB_WIN_H = 7.5
+USB_X = 0.0                 # bottom of the mount, centred
+
 
 # ---------------------------------------------------------------------------
-# Pure geometry helpers (no Fusion calls)
+# Derived positions
 # ---------------------------------------------------------------------------
 
-def spacer_count():
-    gap = WAND_WALL_GAP - WAND_Z - STRIP_T - BASE_T
-    return max(0, int(round(gap / SPACER_T)))
+R = PUCK_D / 2.0
+PINION_X = WAND_X + GEAR_MODULE * GEAR_TEETH
+MOTOR_X = PINION_X + MOTOR_SHAFT_OFFSET          # motor body centre (shaft is on the wand side)
+MOTOR_FACE_Y = GEAR_Y + MOTOR_SHAFT_LEN - MOTOR_FLAT_LEN / 2   # pinion sits on the flats
+MOTOR_BACK_Y = MOTOR_FACE_Y + MOTOR_LEN
+GEAR_ROOT_R = GEAR_MODULE * GEAR_TEETH / 2 - 1.25 * GEAR_MODULE
+GEAR_TIP_R = GEAR_MODULE * GEAR_TEETH / 2 + GEAR_ADDENDUM * GEAR_MODULE
+HUB_CONE = GEAR_ROOT_R - HUB_R                    # 45 degree step from journal to gear
+TOOTH_CHAMFER = GEAR_TIP_R - GEAR_ROOT_R          # 45 degree chamfer on the wand gear's tooth ends
+WAND_PORT_R = WAND_AC / 2 + WAND_PORT_CLEAR
+BEARING_R = HUB_R + JOURNAL_CLEAR
+BEARING_HALF_W = BEARING_R + BEARING_WALL
+MOUNT_H = WAND_WALL_GAP - WAND_Z - (STRIP_T - STRIP_RECESS)
+BOARD_Z = TRAY_FLOOR + BOARD_STANDOFF
 
 
-def gear_outline(module, teeth, addendum=GEAR_ADDENDUM, backlash=GEAR_BACKLASH, flank_pts=7):
+def wand_gear_stations():
+    """y stations of the wand gear, from the motor-far end: journal end, journal/cone,
+    cone/teeth, full face start, full face end, teeth/cone, cone/journal, journal end.
+    The full face (GEAR_FACE) meshes with the pinion; the chamfered ends let it print on a hub."""
+    g0, g1 = GEAR_Y - GEAR_FACE / 2, GEAR_Y + GEAR_FACE / 2
+    c0, c1 = g0 - TOOTH_CHAMFER, g1 + TOOTH_CHAMFER
+    return (c0 - HUB_CONE - HUB_L, c0 - HUB_CONE, c0, g0, g1, c1, c1 + HUB_CONE, c1 + HUB_CONE + HUB_L)
+
+
+def bearing_spans():
+    """y ranges of the two bearings (journal length, less a gap at the gear side)."""
+    s = wand_gear_stations()
+    return [(s[0] - 0.5, s[1] - GEAR_SIDE_GAP), (s[6] + GEAR_SIDE_GAP, s[7])]
+
+
+def bearing_blocks():
+    """y ranges of the bearing blocks. The one by the wall runs into it, so the wand
+    port goes through solid material and that hub's end has a thrust face."""
+    (a0, a1), (b0, b1) = bearing_spans()
+    return [(-R - 1, a1), (b0, b1)]
+
+
+def board_holes():
+    bx, by = BOARD_CENTRE
+    return {(sx, sy): (bx + sx * BOARD_HOLE_DX / 2, by + sy * BOARD_HOLE_DY / 2)
+            for sx in (-1, 1) for sy in (-1, 1)}
+
+
+def board_screw_holes():
+    """Two diagonal corners get M3 screws into inserts, the other two locate on pins."""
+    h = board_holes()
+    return [h[(1, -1)], h[(-1, 1)]], [h[(-1, -1)], h[(1, 1)]]
+
+
+# ---------------------------------------------------------------------------
+# Pure geometry helpers (no CAD calls)
+# ---------------------------------------------------------------------------
+
+def gear_outline(module, teeth, addendum=GEAR_ADDENDUM, backlash=GEAR_BACKLASH, flank_pts=7, rot=0.0):
     """Closed involute outline as a list of (x, y) in mm, centred on the origin."""
     pa = math.radians(20.0)
     rp = module * teeth / 2.0
@@ -134,7 +229,7 @@ def gear_outline(module, teeth, addendum=GEAR_ADDENDUM, backlash=GEAR_BACKLASH, 
     ts = [t0 + (t1 - t0) * i / (flank_pts - 1) for i in range(flank_pts)]
     pts = []
     for k in range(teeth):
-        a = 2 * math.pi * k / teeth
+        a = 2 * math.pi * k / teeth + rot
         flank = [(rb * math.sqrt(1 + t * t), t - math.atan(t)) for t in ts]
         if rr < rb:
             pts.append((rr * math.cos(a - ha), rr * math.sin(a - ha)))
@@ -152,15 +247,22 @@ def hexagon(af, rot=0.0):
     return [(rc * math.cos(math.radians(rot + 60 * i)), rc * math.sin(math.radians(rot + 60 * i))) for i in range(6)]
 
 
-def d_bore(d, flats):
-    """Round bore with two flats, as a closed list of segments ('L' line / 'A' arc)."""
+def d_bore(d, flats, n=24):
+    """Round bore with two flats, as a polygon (flats at x = +-flats/2)."""
     r = d / 2.0
     f = flats / 2.0
-    y = math.sqrt(r * r - f * f)
-    return [('L', (f, -y), (f, y)),
-            ('A', (f, y), (0.0, r), (-f, y)),
-            ('L', (-f, y), (-f, -y)),
-            ('A', (-f, -y), (0.0, -r), (f, -y))]
+    a0 = math.acos(f / r)                      # angle where the flat meets the circle
+    pts = []
+    for side in (1, -1):                       # top arc then bottom arc
+        start, end = (a0, math.pi - a0) if side == 1 else (math.pi + a0, 2 * math.pi - a0)
+        for i in range(n + 1):
+            a = start + (end - start) * i / n
+            pts.append((r * math.cos(a), r * math.sin(a)))
+    return pts
+
+
+def circle_pts(r, n=48, cx=0.0, cy=0.0):
+    return [(cx + r * math.cos(2 * math.pi * i / n), cy + r * math.sin(2 * math.pi * i / n)) for i in range(n)]
 
 
 def rounded_polyline(pts, radii):
@@ -199,9 +301,15 @@ def rounded_polyline(pts, radii):
     return segs
 
 
+def close_on_axis(segs, z_seam):
+    """Close a dome half-profile (from the axis at the front round to the seam) back to the axis."""
+    start = segs[0][1]
+    end = segs[-1][-1]
+    return segs + [('L', end, (0.0, z_seam)), ('L', (0.0, z_seam), start)]
+
+
 def dome_profiles():
-    """(outer, inner) half-profiles of the dome in (radius, z), as segment lists."""
-    R = PUCK_D / 2.0
+    """(outer, inner) closed half-profiles of the dome in (radius, z), as segment lists."""
     zf = PUCK_DEPTH
     rb = R - BEVEL                      # where the flat front ends
     outer_pts = [(0.0, zf), (rb, zf), (R, zf - BEVEL), (R, WAND_Z)]
@@ -211,59 +319,388 @@ def dome_profiles():
     r_flat = rb + SHELL - off           # inner flat meets inner bevel
     z_side = (zf - off) - (ri - rb)     # inner bevel meets inner wall
     inner_pts = [(0.0, zi), (r_flat, zi), (ri, z_side), (ri, WAND_Z)]
-    return (rounded_polyline(outer_pts, [0, EDGE_ROUND, EDGE_ROUND, 0]),
-            rounded_polyline(inner_pts, [0, max(0.5, EDGE_ROUND - SHELL), max(0.5, EDGE_ROUND - SHELL), 0]))
+    outer = rounded_polyline(outer_pts, [0, EDGE_ROUND, EDGE_ROUND, 0])
+    inner = rounded_polyline(inner_pts, [0, max(0.5, EDGE_ROUND - SHELL), max(0.5, EDGE_ROUND - SHELL), 0])
+    return close_on_axis(outer, WAND_Z), close_on_axis(inner, WAND_Z)
 
 
-def dome_outer_z(r):
-    """Height of the outer dome surface at radius r (ignores the small rounds)."""
-    R = PUCK_D / 2.0
-    rb = R - BEVEL
-    if r <= rb:
-        return PUCK_DEPTH
-    return PUCK_DEPTH - (r - rb)
+def poly_segs(pts):
+    return [('L', pts[i], pts[(i + 1) % len(pts)]) for i in range(len(pts))]
 
 
-def radial_bar(r0, r1, width, ang_deg):
-    a = math.radians(ang_deg)
-    c, s = math.cos(a), math.sin(a)
-    h = width / 2.0
-    return [(r0 * c + h * s, r0 * s - h * c),
-            (r1 * c + h * s, r1 * s - h * c),
-            (r1 * c - h * s, r1 * s + h * c),
-            (r0 * c - h * s, r0 * s + h * c)]
+def wedge(r0, r1, ang_deg, width_deg):
+    a0, a1 = math.radians(ang_deg - width_deg / 2), math.radians(ang_deg + width_deg / 2)
+    return [(r0 * math.cos(a0), r0 * math.sin(a0)), (r1 * math.cos(a0), r1 * math.sin(a0)),
+            (r1 * math.cos(a1), r1 * math.sin(a1)), (r0 * math.cos(a1), r0 * math.sin(a1))]
+
+
+def ridge_wedges(grow=0.0):
+    """The 72 index ridges (grow > 0 gives the matching grooves)."""
+    r0, r1 = RIDGE_R[0] - grow, RIDGE_R[1] + grow
+    w = RIDGE_DEG + math.degrees(2 * grow / RIDGE_R[0])
+    return [wedge(r0, r1, 360.0 * i / RIDGES, w) for i in range(RIDGES)]
 
 
 # ---------------------------------------------------------------------------
-# Fusion helpers
+# Parts. Each takes a Builder for its own component.
+#
+# Builder interface (all world coordinates, mm). op is 'new', 'join', 'cut'
+# or 'int'; for anything but 'new', target is the body to change.
+#   cyl_z(x, y, z0, h, r)             cylinder along z
+#   cyl_y(x, z, y_mid, length, r)     cylinder along y, centred on y_mid
+#   box(x0, x1, y0, y1, z0, z1)
+#   prism_z(polys, z0, h)             polygons in (x, y), extruded along z
+#   prism_y(polys, y_mid, length)     polygons in (x, z), extruded along y, centred
+#   revolve_z(segs)                   closed (r, z) profile round the z axis
+#   revolve_y(cx, cz, segs)           closed (r, y) profile round a y axis at (cx, cz)
+#   combine(target, tools, op, keep=False)
+# ---------------------------------------------------------------------------
+
+def screw_pillar(b, body, x, y):
+    """Tray pillar for a dome screw: M3 clearance, head counterbored into the back."""
+    b.cyl_z(x, y, 0, WAND_Z, INSERT_BOSS_D / 2, 'join', body)
+
+
+def build_tray(b):
+    fl = TRAY_FLOOR
+    env = b.cyl_z(0, 0, 0, WAND_Z, R, 'new', name='tray envelope')
+    body = b.cyl_z(0, 0, 0, WAND_Z, R, 'new', name='Tray')
+    b.cyl_z(0, 0, fl, WAND_Z, R - TRAY_WALL, 'cut', body)
+    feats = []
+
+    # wand gear bearings (bottom halves)
+    for y0, y1 in bearing_blocks():
+        f = b.box(WAND_X - BEARING_HALF_W, WAND_X + BEARING_HALF_W, y0, y1, fl - 0.5, WAND_Z, 'new')
+        feats.append(f)
+
+    # motor cradle (bottom half)
+    feats.append(motor_block(b, fl - 0.5, WAND_Z))
+
+    # board standoffs: two with inserts, two with locating pins
+    screws, pins = board_screw_holes()
+    for hx, hy in screws:
+        feats.append(b.cyl_z(hx, hy, fl - 0.5, BOARD_STANDOFF + 0.5, INSERT_BOSS_D / 2, 'new'))
+    for hx, hy in pins:
+        f = b.cyl_z(hx, hy, fl - 0.5, BOARD_STANDOFF + 0.5, 3.0, 'new')
+        b.cyl_z(hx, hy, BOARD_Z, 2.0, BOARD_HOLE_D / 2 - 0.2, 'join', f)
+        feats.append(f)
+
+    # pillars for the dome screws
+    for x, y in DOME_SCREWS:
+        feats.append(b.cyl_z(x, y, fl - 0.5, WAND_Z - fl + 0.5, INSERT_BOSS_D / 2, 'new'))
+
+    # centre boss: insert for the mount screw, pressed in from the back
+    feats.append(b.cyl_z(0, 0, fl - 0.5, INSERT_DEPTH + 0.8 - fl + 0.5, INSERT_BOSS_D / 2, 'new'))
+
+    # C3 SuperMini frame (a dab of hot glue holds the board in it)
+    cx, cy = C3_CENTRE
+    w, h = C3_W / 2 + CLEAR, C3_H / 2 + CLEAR
+    f = b.box(cx - w - 1.2, cx + w + 1.2, cy - h - 1.2, cy + h + 1.2, fl - 0.5, fl + C3_FRAME_H, 'new')
+    b.box(cx - w, cx + w, cy - h, cy + h, fl, fl + C3_FRAME_H + 1, 'cut', f)
+    # finger notches so the board can be lifted out
+    b.box(cx - 4, cx + 4, cy - h - 2, cy + h + 2, fl + 1.0, fl + C3_FRAME_H + 1, 'cut', f)
+    feats.append(f)
+
+    for f in feats:
+        b.combine(f, [env], 'int', keep=True)
+    b.combine(body, feats, 'join')
+    b.combine(body, [env], 'int')          # tidy anything that poked outside
+
+    # ---- cuts ----
+    # wand gear bearing seats and the wand ports (clearance only, no contact)
+    for y0, y1 in bearing_spans():
+        b.cyl_y(WAND_X, WAND_Z, (y0 + y1) / 2, y1 - y0 + 0.02, BEARING_R, 'cut', body)
+    b.cyl_y(WAND_X, WAND_Z, 0, PUCK_D + 20, WAND_PORT_R, 'cut', body)
+    # motor
+    motor_cuts(b, body)
+    # board: insert pockets
+    for hx, hy in screws:
+        b.cyl_z(hx, hy, BOARD_Z - INSERT_DEPTH, INSERT_DEPTH + 1, INSERT_D / 2, 'cut', body)
+    # dome screws: clearance and a counterbore from the back
+    for x, y in DOME_SCREWS:
+        b.cyl_z(x, y, -1, WAND_Z + 2, M3_CLEAR / 2, 'cut', body)
+        b.cyl_z(x, y, -1, 1 + M3_HEAD_H + M3_CB_SINK, M3_CB_D / 2, 'cut', body)
+    # mount screw insert, from the back
+    b.cyl_z(0, 0, -1, INSERT_DEPTH + 1, INSERT_D / 2, 'cut', body)
+    # wires from the USB socket in the mount
+    b.cyl_z(WIRE_HOLE[0], WIRE_HOLE[1], -1, fl + 2, WIRE_HOLE_D / 2, 'cut', body)
+    # index grooves on the back (the mount's ridges drop into them)
+    b.prism_z(ridge_wedges(0.25), -1, RIDGE_H + 0.2 + 1, 'cut', body)
+    return body
+
+
+def motor_block(b, z0, z1):
+    """Block round the motor can; the tray takes the bottom half, the dome the top."""
+    x0 = MOTOR_X - MOTOR_D / 2 - 3.0
+    x1 = MOTOR_X + MOTOR_COVER_R + 1.6
+    f = b.box(x0, x1, MOTOR_FACE_Y + 0.5, MOTOR_BACK_Y + 2.0, z0, z1, 'new')
+    # front stop on the side away from the shaft
+    b.box(MOTOR_X + 4.0, MOTOR_X + MOTOR_D / 2 + 1.0, MOTOR_FACE_Y - 1.5, MOTOR_FACE_Y + 0.6, z0, z1, 'join', f)
+    return f
+
+
+def motor_cuts(b, body):
+    yc = (MOTOR_FACE_Y + MOTOR_BACK_Y) / 2
+    # the can (the block's back end stays as an end stop)
+    b.cyl_y(MOTOR_X, WAND_Z, yc, MOTOR_LEN + 2 * 0.2, MOTOR_D / 2 + MOTOR_CLEAR, 'cut', body)
+    # front stop must clear the can face: it only bears on the rim
+    b.cyl_y(MOTOR_X, WAND_Z, MOTOR_FACE_Y - 1, 2.2, MOTOR_D / 2 - 2.0, 'cut', body)
+    # blue wire cover: keys the motor so it can't turn; wires leave through the side
+    hw = MOTOR_COVER_W / 2 + 0.3
+    b.box(MOTOR_X + MOTOR_D / 2 - 3, MOTOR_X + MOTOR_COVER_R + 5, MOTOR_FACE_Y + 0.5 - 0.01, MOTOR_BACK_Y + 0.2,
+          WAND_Z - hw, WAND_Z + hw, 'cut', body)
+
+
+def build_dome(b):
+    outer_segs, inner_segs = dome_profiles()
+    outer = b.revolve_z(outer_segs, name='Dome')
+    inner = b.revolve_z(inner_segs, name='dome void')
+    top = PUCK_DEPTH + 1
+
+    feats = []
+    # screw bosses with inserts at the seam end
+    for x, y in DOME_SCREWS:
+        feats.append(b.cyl_z(x, y, WAND_Z, top - WAND_Z, INSERT_BOSS_D / 2, 'new'))
+    # wand gear bearing caps
+    for y0, y1 in bearing_blocks():
+        f = b.box(WAND_X - BEARING_HALF_W, WAND_X + BEARING_HALF_W, y0, y1, WAND_Z, top, 'new')
+        feats.append(f)
+    # motor cap
+    feats.append(motor_block(b, WAND_Z, top))
+    # button socket
+    sx, sy = SW_POS
+    sw_bottom = PUCK_DEPTH + SW_CAP_PROUD - SW_TOTAL_H
+    sock_bottom = sw_bottom - SW_PLUG_T - 0.5
+    o = SW_BODY / 2 + CLEAR + 1.6
+    feats.append(b.box(sx - o, sx + o, sy - o, sy + o, sock_bottom, top, 'new'))
+
+    for f in feats:
+        b.combine(f, [outer], 'int', keep=True)
+    b.combine(outer, [inner], 'cut')
+
+    # lip that drops into the tray, with a 45 degree shoulder so it prints face-down
+    r_out = R - TRAY_WALL - LIP_CLEAR
+    r_in = r_out - LIP_T
+    r_sh = R - SHELL + 0.5
+    lip = b.revolve_z(poly_segs([(r_in, WAND_Z - LIP_H), (r_out, WAND_Z - LIP_H), (r_out, WAND_Z),
+                                 (r_sh, WAND_Z), (r_sh, WAND_Z + 2 + (r_sh - r_in)),
+                                 (r_in, WAND_Z + 2)]), name='lip')
+    # no lip where the wand passes
+    for s in (-1, 1):
+        b.box(WAND_X - GEAR_TIP_R - 2, WAND_X + GEAR_TIP_R + 2, s * 25, s * (R + 5),
+              WAND_Z - LIP_H - 1, WAND_Z + 10, 'cut', lip)
+    b.combine(outer, feats + [lip], 'join')
+
+    # ---- cuts ----
+    sw = b.box(sx - SW_BODY / 2 - CLEAR, sx + SW_BODY / 2 + CLEAR, sy - SW_BODY / 2 - CLEAR, sy + SW_BODY / 2 + CLEAR,
+               sock_bottom - 1, PUCK_DEPTH - SHELL, 'new')
+    b.combine(outer, [sw], 'cut')
+    b.cyl_z(sx, sy, sw_bottom, 30, SW_CAP_D / 2 + 0.3, 'cut', outer)
+    for x, y in DOME_SCREWS:
+        b.cyl_z(x, y, WAND_Z - 0.01, INSERT_DEPTH, INSERT_D / 2, 'cut', outer)
+    for y0, y1 in bearing_spans():
+        b.cyl_y(WAND_X, WAND_Z, (y0 + y1) / 2, y1 - y0 + 0.02, BEARING_R, 'cut', outer)
+    b.cyl_y(WAND_X, WAND_Z, 0, PUCK_D + 20, WAND_PORT_R, 'cut', outer)
+    motor_cuts(b, outer)
+    return outer
+
+
+def build_wand_gear(b):
+    to3 = lambda p: (WAND_X + p[0], WAND_Z + p[1])
+    a0, j0, c0, g0, g1, c1, j1, a1 = wand_gear_stations()
+    gear = b.prism_y([[to3(p) for p in gear_outline(GEAR_MODULE, GEAR_TEETH)]], GEAR_Y, c1 - c0, name='Wand gear')
+    # 45 degree chamfers on the tooth ends, so it prints on a hub with no flat overhangs
+    tip = GEAR_TIP_R + 0.05
+    env = b.revolve_y(WAND_X, WAND_Z, poly_segs([
+        (3.0, c0 - 0.01), (GEAR_ROOT_R - 0.01, c0 - 0.01), (tip, g0 - 0.06), (tip, g1 + 0.06),
+        (GEAR_ROOT_R - 0.01, c1 + 0.01), (3.0, c1 + 0.01)]))
+    b.combine(gear, [env], 'int')
+    hub = b.revolve_y(WAND_X, WAND_Z, poly_segs([
+        (3.0, a0), (HUB_R, a0), (HUB_R, j0), (GEAR_ROOT_R, c0),
+        (GEAR_ROOT_R, c1), (HUB_R, j1), (HUB_R, a1), (3.0, a1)]))
+    b.combine(gear, [hub], 'join')
+    b.prism_y([[to3(p) for p in hexagon(WAND_AF + WAND_FIT, 30)]], GEAR_Y, a1 - a0 + 2, 'cut', gear)
+    return gear
+
+
+def build_pinion(b):
+    to3 = lambda p: (PINION_X + p[0], WAND_Z + p[1])
+    half_tooth = math.pi / GEAR_TEETH        # shown in mesh with the wand gear
+    gear = b.prism_y([[to3(p) for p in gear_outline(GEAR_MODULE, GEAR_TEETH, rot=half_tooth)]], GEAR_Y, GEAR_FACE,
+                     name='Motor pinion')
+    # flats face the wand gear so the print's layer lines don't matter
+    bore = d_bore(MOTOR_SHAFT_D + PINION_FIT, MOTOR_SHAFT_FLATS + PINION_FIT)
+    b.prism_y([[to3(p) for p in bore]], GEAR_Y, GEAR_FACE + 2, 'cut', gear)
+    return gear
+
+
+def build_switch_plug(b):
+    """Square plug pressed into the back of the switch socket. Two notches let the legs out."""
+    sx, sy = SW_POS
+    top = PUCK_DEPTH + SW_CAP_PROUD - SW_TOTAL_H
+    h = SW_BODY / 2 + CLEAR         # same as the socket: a press fit once printed
+    body = b.box(sx - h, sx + h, sy - h, sy + h, top - SW_PLUG_T, top, 'new', name='Switch plug')
+    for side in (-1, 1):
+        x0 = sx + side * h
+        b.box(min(x0, x0 - side * 1.6), max(x0, x0 - side * 1.6), sy - 3.5, sy + 3.5, top - SW_PLUG_T - 1, top + 1, 'cut', body)
+    return body
+
+
+def usb_flat_y():
+    """The mount has a small flat at the bottom where the socket looks out."""
+    return math.sqrt(R * R - (USB_W / 2 + CLEAR + 2) ** 2)
+
+
+def usb_face_y():
+    """Front face of the socket: it sits behind a USB_FACE_T wall with a window for the plug."""
+    return usb_flat_y() - USB_FACE_T
+
+
+def build_mount(b):
+    """One drum, the same 90 mm as the tray. Printed base-down: the Command strip
+    pockets are on the bed, the index ridges on top."""
+    H = MOUNT_H
+    ri = R - MOUNT_WALL
+    body = b.revolve_z(poly_segs([(ri, -H), (R, -H), (R, 0), (MOUNT_FLANGE_R, 0),
+                                  (MOUNT_FLANGE_R, -1.5), (ri, -1.5 - (ri - MOUNT_FLANGE_R))]), name='Mount')
+    b.cyl_z(0, 0, -H, MOUNT_BASE, ri + 0.2, 'join', body)
+    b.cyl_z(0, 0, -H, H, MOUNT_POST_R, 'join', body)
+    b.prism_z(ridge_wedges(), -0.01, RIDGE_H + 0.01, 'join', body)
+
+    # USB-C socket cradle at the bottom: drops in from the top, the tray back pinches it
+    # The socket is a plain moulded block with no flange, so it's captive: a front wall
+    # with a window for the plug, a back stop, and the tray back pressing down on it.
+    fy = usb_flat_y()
+    uy = usb_face_y()
+    hw = USB_W / 2 + CLEAR
+    back = uy - USB_DEPTH - 0.2
+    zt = -(USB_T - USB_PINCH)
+    b.box(USB_X - hw - 2, USB_X + hw + 2, back - 2, R, -H + 1, 0, 'join', body)
+    b.box(USB_X - hw, USB_X + hw, back, uy, zt, 1, 'cut', body)
+    # window for the plug's overmould
+    b.box(USB_X - USB_WIN_W / 2, USB_X + USB_WIN_W / 2, uy - 0.5, R + 1,
+          zt / 2 - USB_WIN_H / 2, zt / 2 + USB_WIN_H / 2, 'cut', body)
+    # slot in the back stop for the wires
+    b.box(USB_X - 3, USB_X + 3, back - 3, back + 0.1, zt / 2 - 3, 1, 'cut', body)
+    # flat on the outside
+    b.box(USB_X - hw - 3, USB_X + hw + 3, fy, R + 1, -H - 1, 1, 'cut', body)
+
+    # clamp screw: M3 x 8 from the back, head on the web under the tray
+    b.cyl_z(0, 0, -H - 1, H + 1 - MOUNT_WEB, M3_CB_D / 2, 'cut', body)
+    b.cyl_z(0, 0, -H - 1, H + 2, M3_CLEAR / 2, 'cut', body)
+    # Command strip pockets
+    for s in (-1, 1):
+        b.box(-STRIP_L / 2 - 0.5, STRIP_L / 2 + 0.5, s * STRIP_Y - STRIP_W / 2 - 0.5, s * STRIP_Y + STRIP_W / 2 + 0.5,
+              -H - 1, -H + STRIP_RECESS, 'cut', body)
+    return body
+
+
+def build_reference(b):
+    """Bought parts and hardware, for checking fit only."""
+    out = {}
+    out['wand'] = b.prism_y([[(WAND_X + px, WAND_Z + py) for px, py in hexagon(WAND_AF, 30)]], 0, 160, name='wand')
+    yc = (MOTOR_FACE_Y + MOTOR_BACK_Y) / 2
+    m = b.cyl_y(MOTOR_X, WAND_Z, yc, MOTOR_LEN, MOTOR_D / 2, 'new', name='28BYJ-48')
+    b.cyl_y(PINION_X, WAND_Z, MOTOR_FACE_Y - MOTOR_BOSS_H / 2, MOTOR_BOSS_H + 0.02, MOTOR_BOSS_D / 2, 'join', m)
+    b.cyl_y(PINION_X, WAND_Z, MOTOR_FACE_Y - (MOTOR_SHAFT_LEN - MOTOR_FLAT_LEN) / 2,
+            MOTOR_SHAFT_LEN - MOTOR_FLAT_LEN + 0.02, MOTOR_SHAFT_D / 2, 'join', m)
+    b.prism_y([[(PINION_X + px, WAND_Z + py) for px, py in d_bore(MOTOR_SHAFT_D, MOTOR_SHAFT_FLATS)]],
+              MOTOR_FACE_Y - MOTOR_SHAFT_LEN + MOTOR_FLAT_LEN / 2, MOTOR_FLAT_LEN, 'join', m)
+    b.box(MOTOR_X + MOTOR_D / 2 - 2, MOTOR_X + MOTOR_COVER_R, MOTOR_BACK_Y - MOTOR_COVER_LEN, MOTOR_BACK_Y,
+          WAND_Z - MOTOR_COVER_W / 2, WAND_Z + MOTOR_COVER_W / 2, 'join', m)
+    out['motor'] = m
+    bx, by = BOARD_CENTRE
+    out['board'] = b.box(bx - BOARD_W / 2, bx + BOARD_W / 2, by - BOARD_H / 2, by + BOARD_H / 2, BOARD_Z, BOARD_Z + 1.6, 'new', name='ULN2003 board')
+    out['board parts'] = b.box(bx - BOARD_W / 2 + 1, bx + BOARD_W / 2 - 1, by - BOARD_H / 2 + 5, by + BOARD_H / 2 - 1,
+                               BOARD_Z + 1.6, BOARD_Z + 1.6 + BOARD_COMP_H, 'new', name='board parts (envelope)')
+    cx, cy = C3_CENTRE
+    out['c3'] = b.box(cx - C3_W / 2, cx + C3_W / 2, cy - C3_H / 2, cy + C3_H / 2, TRAY_FLOOR, TRAY_FLOOR + C3_T, 'new', name='ESP32-C3 SuperMini')
+    sx, sy = SW_POS
+    swb = PUCK_DEPTH + SW_CAP_PROUD - SW_TOTAL_H
+    s = b.box(sx - SW_BODY / 2, sx + SW_BODY / 2, sy - SW_BODY / 2, sy + SW_BODY / 2, swb, swb + 4, 'new', name='switch')
+    b.cyl_z(sx, sy, swb + 4, SW_TOTAL_H - 4, SW_CAP_D / 2, 'join', s)
+    out['switch'] = s
+    uy = usb_face_y()
+    out['usb'] = b.box(USB_X - USB_W / 2, USB_X + USB_W / 2, uy - USB_DEPTH, uy, -USB_T, 0, 'new', name='USB-C socket')
+    # hardware: inserts and screws
+    hw = []
+    def insert(x, y, z0, up):
+        i = b.cyl_z(x, y, z0 if up else z0 - INSERT_L, INSERT_L, INSERT_D / 2 - 0.1, 'new', name='insert')
+        b.cyl_z(x, y, z0 - 10, 20, 1.55, 'cut', i)
+        hw.append(i)
+    def screw(x, y, z_head, length, up, name):
+        # z_head: underside of the head; shaft runs up (or down) from it
+        if up:
+            s = b.cyl_z(x, y, z_head - M3_HEAD_H, M3_HEAD_H, M3_HEAD_D / 2, 'new', name=name)
+            b.cyl_z(x, y, z_head, length, 1.45, 'join', s)
+        else:
+            s = b.cyl_z(x, y, z_head, M3_HEAD_H, M3_HEAD_D / 2, 'new', name=name)
+            b.cyl_z(x, y, z_head - length, length, 1.45, 'join', s)
+        hw.append(s)
+    for x, y in DOME_SCREWS:
+        insert(x, y, WAND_Z, True)
+        screw(x, y, M3_HEAD_H + M3_CB_SINK, 20, True, 'M3x20')
+    insert(0, 0, 0, True)
+    screw(0, 0, -MOUNT_WEB, 8, True, 'M3x8')
+    for hx, hy in board_screw_holes()[0]:
+        insert(hx, hy, BOARD_Z, False)
+        screw(hx, hy, BOARD_Z + 1.6, 6, False, 'M3x6')
+    out['hardware'] = hw
+    wall_z = -MOUNT_H - (STRIP_T - STRIP_RECESS)
+    out['wall'] = b.box(-80, 80, -80, 80, wall_z - 3, wall_z, 'new', name='wall')
+    return out
+
+
+PARTS = [
+    ('Tray (print back-down)', build_tray),
+    ('Dome (print face-down)', build_dome),
+    ('Wand gear (print on either hub)', build_wand_gear),
+    ('Motor pinion (print flat)', build_pinion),
+    ('Switch plug (print flat)', build_switch_plug),
+    ('Mount (print back-down)', build_mount),
+    ('Reference parts (do not print)', build_reference),
+]
+
+
+def hardware_summary():
+    return ('Mount to tray: 1 x M3 x 8 socket head from the back into an insert\n'
+            'Dome to tray: 3 x M3 x 20 socket head from the back into inserts\n'
+            'Board: 2 x M3 x 6 into inserts (the other two corners sit on pins)\n'
+            'Heat-set inserts: 6 x M3 (%.1f mm pockets)\n'
+            'Motor: snip the ears; the tray and dome clamp it, no ties\n'
+            'Mount height: %.1f mm' % (INSERT_D, MOUNT_H))
+
+
+# ---------------------------------------------------------------------------
+# Fusion backend
 # ---------------------------------------------------------------------------
 
 def cm(v):
     return v / 10.0
 
 
-def V(v):
-    return adsk.core.ValueInput.createByReal(cm(v))
-
-
-OP_NEW = adsk.fusion.FeatureOperations.NewBodyFeatureOperation
-OP_JOIN = adsk.fusion.FeatureOperations.JoinFeatureOperation
-OP_CUT = adsk.fusion.FeatureOperations.CutFeatureOperation
-OP_INT = adsk.fusion.FeatureOperations.IntersectFeatureOperation
-
-
-class Builder:
+class FusionBuilder:
     def __init__(self, comp):
         self.c = comp
+        self.OPS = {
+            'new': adsk.fusion.FeatureOperations.NewBodyFeatureOperation,
+            'join': adsk.fusion.FeatureOperations.JoinFeatureOperation,
+            'cut': adsk.fusion.FeatureOperations.CutFeatureOperation,
+            'int': adsk.fusion.FeatureOperations.IntersectFeatureOperation,
+        }
 
-    # planes -----------------------------------------------------------
+    @staticmethod
+    def V(v):
+        return adsk.core.ValueInput.createByReal(cm(v))
+
+    # planes / sketches -----------------------------------------------------
     def _offset_plane(self, base, along, value):
         if abs(value) < 1e-9:
             return base
         n = base.geometry.normal
         sign = float(getattr(n, along))
         inp = self.c.constructionPlanes.createInput()
-        inp.setByOffset(base, V(value * sign))
+        inp.setByOffset(base, self.V(value * sign))
         return self.c.constructionPlanes.add(inp)
 
     def sk_xy(self, z):
@@ -272,15 +709,11 @@ class Builder:
     def sk_xz(self, y):
         return self.c.sketches.add(self._offset_plane(self.c.xZConstructionPlane, 'y', y))
 
-    # drawing ----------------------------------------------------------
     @staticmethod
     def P(sk, x, y, z):
         return sk.modelToSketchSpace(adsk.core.Point3D.create(cm(x), cm(y), cm(z)))
 
-    def circle(self, sk, x, y, z, r):
-        sk.sketchCurves.sketchCircles.addByCenterRadius(self.P(sk, x, y, z), cm(r))
-
-    def poly(self, sk, pts3):
+    def _poly(self, sk, pts3):
         lines = sk.sketchCurves.sketchLines
         pts = [self.P(sk, *p) for p in pts3]
         first = lines.addByTwoPoints(pts[0], pts[1])
@@ -289,18 +722,14 @@ class Builder:
             prev = lines.addByTwoPoints(prev, p).endSketchPoint
         lines.addByTwoPoints(prev, first.startSketchPoint)
 
-    def segs(self, sk, segs, to3):
-        """Draw a closed chain of ('L', p, q) / ('A', p, m, q) given in 2D, mapped by to3."""
+    def _segs(self, sk, segs, to3):
         lines = sk.sketchCurves.sketchLines
         arcs = sk.sketchCurves.sketchArcs
         first = None
         prev = None
-        start_xy = segs[0][1]
         for n, s in enumerate(segs):
             start = prev if prev is not None else self.P(sk, *to3(s[1]))
-            closes = n == len(segs) - 1 and first is not None and \
-                abs(s[-1][0] - start_xy[0]) < 1e-6 and abs(s[-1][1] - start_xy[1]) < 1e-6
-            end = first if closes else self.P(sk, *to3(s[-1]))
+            end = first if (n == len(segs) - 1 and first is not None) else self.P(sk, *to3(s[-1]))
             if s[0] == 'L':
                 ent = lines.addByTwoPoints(start, end)
             else:
@@ -308,32 +737,17 @@ class Builder:
             if first is None:
                 first = ent.startSketchPoint
             prev = ent.endSketchPoint
-        return first, prev
 
-    # profiles ---------------------------------------------------------
     @staticmethod
-    def all_profiles(sk):
+    def _all_profiles(sk):
         col = adsk.core.ObjectCollection.create()
         for i in range(sk.profiles.count):
             col.add(sk.profiles.item(i))
         return col
 
     @staticmethod
-    def profile_with_loops(sk, loops):
-        best = None
-        best_area = -1
-        for i in range(sk.profiles.count):
-            p = sk.profiles.item(i)
-            if p.profileLoops.count == loops:
-                a = float(p.areaProperties().area)
-                if a > best_area:
-                    best, best_area = p, a
-        return best if best is not None else sk.profiles.item(0)
-
-    @staticmethod
-    def largest_profile(sk):
-        best = None
-        best_area = -1
+    def _largest_profile(sk):
+        best, best_area = None, -1
         for i in range(sk.profiles.count):
             p = sk.profiles.item(i)
             a = float(p.areaProperties().area)
@@ -341,28 +755,80 @@ class Builder:
                 best, best_area = p, a
         return best
 
-    # features ---------------------------------------------------------
-    def extrude(self, prof, dist, op, bodies=None):
-        ex = self.c.features.extrudeFeatures
-        inp = ex.createInput(prof, op)
-        inp.setDistanceExtent(False, V(dist))
-        if bodies:
-            inp.participantBodies = list(bodies)
-        return ex.add(inp)
+    # features ----------------------------------------------------------------
+    def _finish(self, feature, op, target, name):
+        if op == 'new':
+            body = feature.bodies.item(0)
+            if name:
+                body.name = name
+            return body
+        return target
 
-    def extrude_sym(self, prof, total, op, bodies=None):
+    def _extrude(self, profs, dist, op, target, name, symmetric=False):
         ex = self.c.features.extrudeFeatures
-        inp = ex.createInput(prof, op)
-        inp.setSymmetricExtent(V(total), True)
-        if bodies:
-            inp.participantBodies = list(bodies)
-        return ex.add(inp)
+        inp = ex.createInput(profs, self.OPS[op])
+        if symmetric:
+            inp.setSymmetricExtent(self.V(dist), True)
+        else:
+            inp.setDistanceExtent(False, self.V(dist))
+        if op != 'new':
+            inp.participantBodies = [target]
+        return self._finish(ex.add(inp), op, target, name)
 
-    def revolve(self, prof, op):
+    def cyl_z(self, x, y, z0, h, r, op='new', target=None, name=None):
+        sk = self.sk_xy(z0)
+        sk.sketchCurves.sketchCircles.addByCenterRadius(self.P(sk, x, y, z0), cm(r))
+        return self._extrude(sk.profiles.item(0), h, op, target, name)
+
+    def cyl_y(self, x, z, y_mid, length, r, op='new', target=None, name=None):
+        sk = self.sk_xz(y_mid)
+        sk.sketchCurves.sketchCircles.addByCenterRadius(self.P(sk, x, y_mid, z), cm(r))
+        return self._extrude(sk.profiles.item(0), length, op, target, name, symmetric=True)
+
+    def box(self, x0, x1, y0, y1, z0, z1, op='new', target=None, name=None):
+        sk = self.sk_xy(z0)
+        self._poly(sk, [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0)])
+        return self._extrude(sk.profiles.item(0), z1 - z0, op, target, name)
+
+    def prism_z(self, polys, z0, h, op='new', target=None, name=None):
+        sk = self.sk_xy(z0)
+        sk.isComputeDeferred = True
+        for poly in polys:
+            self._poly(sk, [(px, py, z0) for px, py in poly])
+        sk.isComputeDeferred = False
+        return self._extrude(self._all_profiles(sk), h, op, target, name)
+
+    def prism_y(self, polys, y_mid, length, op='new', target=None, name=None):
+        sk = self.sk_xz(y_mid)
+        sk.isComputeDeferred = True
+        for poly in polys:
+            self._poly(sk, [(px, y_mid, pz) for px, pz in poly])
+        sk.isComputeDeferred = False
+        profs = self._largest_profile(sk) if len(polys) == 1 else self._all_profiles(sk)
+        return self._extrude(profs, length, op, target, name, symmetric=True)
+
+    def revolve_z(self, segs, op='new', target=None, name=None):
+        sk = self.sk_xz(0)
+        self._segs(sk, segs, lambda p: (p[0], 0.0, p[1]))
         rv = self.c.features.revolveFeatures
-        inp = rv.createInput(prof, self.c.zConstructionAxis, op)
+        inp = rv.createInput(self._largest_profile(sk), self.c.zConstructionAxis, self.OPS[op])
         inp.setAngleExtent(False, adsk.core.ValueInput.createByString('360 deg'))
-        return rv.add(inp)
+        if op != 'new':
+            inp.participantBodies = [target]
+        return self._finish(rv.add(inp), op, target, name)
+
+    def revolve_y(self, cx, cz, segs, op='new', target=None, name=None):
+        sk = self.sk_xy(cz)
+        self._segs(sk, segs, lambda p: (cx + p[0], p[1], cz))
+        ys = [s[1][1] for s in segs]
+        axis = sk.sketchCurves.sketchLines.addByTwoPoints(self.P(sk, cx, min(ys) - 5, cz), self.P(sk, cx, max(ys) + 5, cz))
+        axis.isConstruction = True
+        rv = self.c.features.revolveFeatures
+        inp = rv.createInput(self._largest_profile(sk), axis, self.OPS[op])
+        inp.setAngleExtent(False, adsk.core.ValueInput.createByString('360 deg'))
+        if op != 'new':
+            inp.participantBodies = [target]
+        return self._finish(rv.add(inp), op, target, name)
 
     def combine(self, target, tools, op, keep=False):
         cf = self.c.features.combineFeatures
@@ -370,308 +836,41 @@ class Builder:
         for t in tools:
             col.add(t)
         inp = cf.createInput(target, col)
-        inp.operation = op
+        inp.operation = self.OPS[op]
         inp.isKeepToolBodies = keep
-        return cf.add(inp)
+        cf.add(inp)
+        return target
 
-    # shapes -----------------------------------------------------------
-    def cyl_z(self, x, y, z0, h, r, op, bodies=None):
-        sk = self.sk_xy(z0)
-        self.circle(sk, x, y, z0, r)
-        return self.extrude(sk.profiles.item(0), h, op, bodies)
-
-    def tube_z(self, x, y, z0, h, r_out, r_in, op, bodies=None):
-        sk = self.sk_xy(z0)
-        self.circle(sk, x, y, z0, r_out)
-        self.circle(sk, x, y, z0, r_in)
-        return self.extrude(self.profile_with_loops(sk, 2), h, op, bodies)
-
-    def box(self, x0, x1, y0, y1, z0, z1, op, bodies=None):
-        sk = self.sk_xy(z0)
-        self.poly(sk, [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0)])
-        return self.extrude(sk.profiles.item(0), z1 - z0, op, bodies)
-
-    def cyl_y(self, x, z, y_mid, length, r, op, bodies=None):
-        sk = self.sk_xz(y_mid)
-        self.circle(sk, x, y_mid, z, r)
-        return self.extrude_sym(sk.profiles.item(0), length, op, bodies)
-
-    def hex_pocket_z(self, x, y, z0, h, af, op, bodies=None):
-        sk = self.sk_xy(z0)
-        self.poly(sk, [(x + px, y + py, z0) for px, py in hexagon(af)])
-        return self.extrude(sk.profiles.item(0), h, op, bodies)
-
-    def radial_bars(self, z0, h, width, op, bodies=None):
-        sk = self.sk_xy(z0)
-        for i in range(TEETH_COUNT):
-            bar = radial_bar(TOOTH_R[0], TOOTH_R[1], width, 360.0 * i / TEETH_COUNT)
-            self.poly(sk, [(px, py, z0) for px, py in bar])
-        return self.extrude(self.all_profiles(sk), h, op, bodies)
-
-
-def new_comp(root, name):
-    occ = root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-    comp = occ.component
-    comp.name = name
-    return comp
-
-
-def first_body(feature, name):
-    b = feature.bodies.item(0)
-    b.name = name
-    return b
-
-
-# ---------------------------------------------------------------------------
-# Parts
-# ---------------------------------------------------------------------------
-
-def build_tray(root):
-    c = new_comp(root, 'Tray (print back-down)')
-    b = Builder(c)
-    R = PUCK_D / 2.0
-    Ri = R - TRAY_WALL
-    body = first_body(b.cyl_z(0, 0, 0, WAND_Z, R, OP_NEW), 'Tray')
-    b.cyl_z(0, 0, TRAY_FLOOR, WAND_Z - TRAY_FLOOR, Ri, OP_CUT, [body])
-    fl = TRAY_FLOOR
-
-    # wand gear end-stops (U seats cut later)
-    gap = 0.5
-    g0, g1 = GEAR_Y - GEAR_FACE / 2, GEAR_Y + GEAR_FACE / 2
-    stop_top = WAND_Z - 3.5
-    b.box(WAND_X - 7, WAND_X + 7, g0 - gap - 4, g0 - gap, fl, stop_top, OP_JOIN, [body])
-    b.box(WAND_X - 7, WAND_X + 7, g1 + gap, g1 + gap + 4, fl, stop_top, OP_JOIN, [body])
-
-    # motor saddle
-    mx = WAND_X + GEAR_MODULE * GEAR_TEETH + MOTOR_SHAFT_OFFSET   # motor body centre x
-    m0, m1 = MOTOR_FACE_Y + 0.5, MOTOR_FACE_Y + MOTOR_LEN - 0.5
-    b.box(mx - 12, mx + 12, m0, m1, fl, WAND_Z - 3, OP_JOIN, [body])
-
-    # board standoffs
-    bx, by = BOARD_CENTRE
-    holes = [(bx + dx * BOARD_HOLE_DX / 2, by + dy * BOARD_HOLE_DY / 2) for dx in (-1, 1) for dy in (-1, 1)]
-    for hx, hy in holes:
-        b.cyl_z(hx, hy, fl, BOARD_STANDOFF, 3.0, OP_JOIN, [body])
-
-    # pillars that carry the dome screws up to the split line
-    for x, y in DOME_SCREWS:
-        b.cyl_z(x, y, fl, WAND_Z - fl, 3.5, OP_JOIN, [body])
-
-    # centre nut boss for the M4 clamp screw
-    b.cyl_z(0, 0, fl, 4.5, 6.0, OP_JOIN, [body])
-
-    # C3 SuperMini frame
-    cx, cy = C3_CENTRE
-    w, h = C3_W / 2 + CLEAR, C3_H / 2 + CLEAR
-    b.box(cx - w - 1.2, cx + w + 1.2, cy - h - 1.2, cy + h + 1.2, fl, fl + 2.0, OP_JOIN, [body])
-    b.box(cx - w, cx + w, cy - h, cy + h, fl, fl + 2.1, OP_CUT, [body])
-
-    # ---- cuts ----
-    # U seats in the gear stops (the wand is the gear's axle)
-    b.cyl_y(WAND_X, WAND_Z, GEAR_Y, GEAR_FACE + 2 * gap + 10, WAND_AC / 2 + 1.0, OP_CUT, [body])
-    # motor saddle
-    b.cyl_y(mx, WAND_Z, (m0 + m1) / 2, m1 - m0 + 0.01, MOTOR_D / 2 + 0.2, OP_CUT, [body])
-    # two cable-tie slots through the saddle; the ties go right round the motor
-    for ty in (m0 + 3.5, m1 - 3.5):
-        b.box(mx - 20, mx + 20, ty - TIE_W / 2, ty + TIE_W / 2, fl, WAND_Z, OP_CUT, [body])
-    # standoff holes
-    for hx, hy in holes:
-        b.cyl_z(hx, hy, fl + 1, BOARD_STANDOFF, M3_TAP / 2, OP_CUT, [body])
-    # M4 clamp: through hole + nut pocket
-    b.cyl_z(0, 0, -1, fl + 6, M4_HOLE / 2, OP_CUT, [body])
-    b.hex_pocket_z(0, 0, fl + 4.5 - (M4_NUT_T + 0.3), M4_NUT_T + 0.31, M4_NUT_AF + 0.3, OP_CUT, [body])
-    # tray-to-dome screw holes (M3 x 20 from the back, heads sunk flush)
-    for x, y in DOME_SCREWS:
-        b.cyl_z(x, y, -1, WAND_Z + 2, M3_CLEAR / 2, OP_CUT, [body])
-        b.cyl_z(x, y, -1, 1 + M3_HEAD_H, M3_HEAD_D / 2 + 0.3, OP_CUT, [body])
-    # USB-C socket pocket through the bottom edge
-    ux0, ux1 = USB_X - USB_W / 2 - CLEAR, USB_X + USB_W / 2 + CLEAR
-    ry = math.sqrt(R * R - USB_X * USB_X)
-    b.box(ux0, ux1, ry - USB_DEPTH - 0.3, R + 2, fl, fl + USB_T + 2 * CLEAR, OP_CUT, [body])
-    # wand notches (half-holes; the dome supplies the other half)
-    b.cyl_y(WAND_X, WAND_Z, 0, PUCK_D + 20, WAND_AC / 2 + 0.25, OP_CUT, [body])
-    # angle-index grooves on the back (match the spacer teeth)
-    b.radial_bars(0, TOOTH_H + 0.2, TOOTH_W + 0.4, OP_CUT, [body])
-    return c
-
-
-DOME_SCREWS = [(37.0, 0.0), (-30.0, -20.0)]   # M3 x 20 from the back
-
-
-def build_dome(root):
-    c = new_comp(root, 'Dome (print face-down)')
-    b = Builder(c)
-    R = PUCK_D / 2.0
-    outer_segs, inner_segs = dome_profiles()
-
-    def rev(segs, name):
-        sk = b.sk_xz(0)
-        to3 = lambda p: (p[0], 0.0, p[1])
-        first, last = b.segs(sk, segs, to3)
-        lines = sk.sketchCurves.sketchLines
-        # close along the axis and the split plane
-        bottom_axis = b.P(sk, 0, 0, WAND_Z)
-        l1 = lines.addByTwoPoints(last, bottom_axis)
-        lines.addByTwoPoints(l1.endSketchPoint, first)
-        return first_body(b.revolve(b.largest_profile(sk), OP_NEW), name)
-
-    outer = rev(outer_segs, 'Dome')
-    inner = rev(inner_segs, 'dome void')
-
-    feats = []
-    # screw bosses
-    for x, y in DOME_SCREWS:
-        feats.append(first_body(b.cyl_z(x, y, WAND_Z, PUCK_DEPTH - WAND_Z + 2, 3.0, OP_NEW), 'boss'))
-    # button socket
-    sx, sy = SW_POS
-    sw_bottom = PUCK_DEPTH + SW_CAP_PROUD - SW_TOTAL_H
-    sock_bottom = sw_bottom - SW_PLUG_T - 0.5
-    sk = b.sk_xy(sock_bottom)
-    o, i = SW_BODY / 2 + CLEAR + 1.6, SW_BODY / 2 + CLEAR
-    b.poly(sk, [(sx - o, sy - o, sock_bottom), (sx + o, sy - o, sock_bottom), (sx + o, sy + o, sock_bottom), (sx - o, sy + o, sock_bottom)])
-    b.poly(sk, [(sx - i, sy - i, sock_bottom), (sx + i, sy - i, sock_bottom), (sx + i, sy + i, sock_bottom), (sx - i, sy + i, sock_bottom)])
-    feats.append(first_body(b.extrude(b.profile_with_loops(sk, 2), PUCK_DEPTH - sock_bottom + 1, OP_NEW), 'switch socket'))
-
-    for f in feats:
-        b.combine(f, [outer], OP_INT, keep=True)
-    b.combine(outer, [inner], OP_CUT)
-
-    # press-fit lip that drops into the tray
-    lip_in = R - TRAY_WALL - 1.5
-    lip_up = first_body(b.tube_z(0, 0, WAND_Z, 2.0, R - SHELL + 0.2, lip_in, OP_NEW), 'lip')
-    lip_lo = first_body(b.tube_z(0, 0, WAND_Z - 3.0, 3.0, R - TRAY_WALL - 0.15, lip_in, OP_NEW), 'lip2')
-    b.combine(outer, feats + [lip_up, lip_lo], OP_JOIN)
-
-    # ---- cuts ----
-    b.cyl_z(sx, sy, sw_bottom, 30, SW_CAP_D / 2 + 0.3, OP_CUT, [outer])
-    for x, y in DOME_SCREWS:
-        depth = min(9.0, dome_outer_z(math.hypot(x, y)) - WAND_Z - 1.5)
-        b.cyl_z(x, y, WAND_Z - 0.01, depth, M3_TAP / 2, OP_CUT, [outer])
-    b.cyl_y(WAND_X, WAND_Z, 0, PUCK_D + 20, WAND_AC / 2 + 0.25, OP_CUT, [outer])
-    # USB socket clearance in the lip
-    ux0, ux1 = USB_X - USB_W / 2 - CLEAR, USB_X + USB_W / 2 + CLEAR
-    b.box(ux0, ux1, R - 14, R + 2, WAND_Z - 3.5, WAND_Z + 0.01, OP_CUT, [outer])
-    return c
-
-
-def build_gear(root, name, cx, bore):
-    c = new_comp(root, name)
-    b = Builder(c)
-    sk = b.sk_xz(GEAR_Y)
-    to3 = lambda p: (cx + p[0], GEAR_Y, WAND_Z + p[1])
-    b.poly(sk, [to3(p) for p in gear_outline(GEAR_MODULE, GEAR_TEETH)])
-    if bore == 'hex':
-        b.poly(sk, [to3(p) for p in hexagon(WAND_AF + WAND_FIT, 30)])
-    else:
-        b.segs(sk, d_bore(MOTOR_SHAFT_D + 0.1, MOTOR_SHAFT_FLATS + 0.1), to3)
-    feat = b.extrude_sym(b.profile_with_loops(sk, 2), GEAR_FACE, OP_NEW)
-    first_body(feat, name.split(' (')[0])
-    return c
-
-
-def build_switch_plug(root):
-    """Square plug pressed into the back of the switch socket. Two notches let the legs out."""
-    c = new_comp(root, 'Switch plug (print flat)')
-    b = Builder(c)
-    sx, sy = SW_POS
-    top = PUCK_DEPTH + SW_CAP_PROUD - SW_TOTAL_H
-    h = SW_BODY / 2 + CLEAR - 0.1
-    body = first_body(b.box(sx - h, sx + h, sy - h, sy + h, top - SW_PLUG_T, top, OP_NEW), 'Switch plug')
-    for side in (-1, 1):
-        x0 = sx + side * h
-        b.box(min(x0, x0 - side * 1.6), max(x0, x0 - side * 1.6), sy - 3.5, sy + 3.5, top - SW_PLUG_T - 1, top + 1, OP_CUT, [body])
-    return c
-
-
-def build_mount(root, n):
-    c = new_comp(root, 'Wall mount (print flat, teeth up)')
-    b = Builder(c)
-    R = PLINTH_D / 2.0
-    z = 0.0
-    for i in range(n):
-        top = z
-        bot = z - SPACER_T
-        body = first_body(b.cyl_z(0, 0, bot, SPACER_T, R, OP_NEW), 'Spacer %d' % (i + 1))
-        b.cyl_z(0, 0, bot - 1, SPACER_T + 2, M4_HOLE / 2, OP_CUT, [body])
-        b.radial_bars(top, TOOTH_H, TOOTH_W, OP_JOIN, [body])
-        b.radial_bars(bot, TOOTH_H + 0.2, TOOTH_W + 0.4, OP_CUT, [body])
-        z = bot
-    top = z
-    bot = z - BASE_T
-    base = first_body(b.cyl_z(0, 0, bot, BASE_T, R, OP_NEW), 'Base')
-    b.cyl_z(0, 0, bot - 1, BASE_T + 2, M4_HOLE / 2, OP_CUT, [base])
-    b.cyl_z(0, 0, bot, M4_HEAD_H + 0.2, M4_HEAD_D / 2 + 0.4, OP_CUT, [base])
-    b.radial_bars(top, TOOTH_H, TOOTH_W, OP_JOIN, [base])
-    return c, bot
-
-
-def build_reference(root, wall_z):
-    c = new_comp(root, 'Reference parts (do not print)')
-    b = Builder(c)
-    # wand
-    sk = b.sk_xz(0)
-    b.poly(sk, [(WAND_X + px, 0, WAND_Z + py) for px, py in hexagon(WAND_AF, 30)])
-    first_body(b.extrude_sym(sk.profiles.item(0), 160, OP_NEW), 'wand')
-    # motor
-    mx = WAND_X + GEAR_MODULE * GEAR_TEETH + MOTOR_SHAFT_OFFSET
-    first_body(b.cyl_y(mx, WAND_Z, MOTOR_FACE_Y + MOTOR_LEN / 2, MOTOR_LEN, MOTOR_D / 2, OP_NEW), '28BYJ-48')
-    # board
-    bx, by = BOARD_CENTRE
-    z0 = TRAY_FLOOR + BOARD_STANDOFF
-    first_body(b.box(bx - BOARD_W / 2, bx + BOARD_W / 2, by - BOARD_H / 2, by + BOARD_H / 2, z0, z0 + 1.6, OP_NEW), 'ULN2003 board')
-    cx, cy = C3_CENTRE
-    first_body(b.box(cx - C3_W / 2, cx + C3_W / 2, cy - C3_H / 2, cy + C3_H / 2, TRAY_FLOOR, TRAY_FLOOR + 4, OP_NEW), 'ESP32-C3 SuperMini')
-    R = PUCK_D / 2.0
-    ry = math.sqrt(R * R - USB_X * USB_X)
-    first_body(b.box(USB_X - USB_W / 2, USB_X + USB_W / 2, ry - USB_DEPTH, ry, TRAY_FLOOR, TRAY_FLOOR + USB_T, OP_NEW), 'USB-C socket')
-    # wall
-    first_body(b.box(-80, 80, -80, 80, wall_z - 3, wall_z, OP_NEW), 'wall')
-    return c
-
-
-# ---------------------------------------------------------------------------
 
 def tidy(root):
-    """Hide the helper planes and sketches so only the parts show."""
+    """Hide the helper planes, sketches and leftover tool bodies so only the parts show."""
     for i in range(root.occurrences.count):
         comp = root.occurrences.item(i).component
         for j in range(comp.constructionPlanes.count):
             comp.constructionPlanes.item(j).isLightBulbOn = False
         for j in range(comp.sketches.count):
             comp.sketches.item(j).isVisible = False
+        for j in range(comp.bRepBodies.count):
+            body = comp.bRepBodies.item(j)
+            if body.name in ('tray envelope', 'dome void'):
+                body.isLightBulbOn = False
 
 
 def run(context):
     app = adsk.core.Application.get()
     ui = app.userInterface
     try:
-        doc = app.documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)
+        app.documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)
         design = adsk.fusion.Design.cast(app.activeProduct)
         design.designType = adsk.fusion.DesignTypes.ParametricDesignType
         root = design.rootComponent
-
-        n = spacer_count()
-        build_tray(root)
-        build_dome(root)
-        build_gear(root, 'Wand gear (print flat)', WAND_X, 'hex')
-        build_gear(root, 'Motor pinion (print flat)', WAND_X + GEAR_MODULE * GEAR_TEETH, 'd')
-        build_switch_plug(root)
-        _, base_back = build_mount(root, n)
-        build_reference(root, base_back - STRIP_T)
+        for name, fn in PARTS:
+            occ = root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+            occ.component.name = name
+            fn(FusionBuilder(occ.component))
         tidy(root)
-
-        head_seat = base_back + M4_HEAD_H + 0.2
-        nut_top = TRAY_FLOOR + 4.5
-        screw = nut_top - head_seat
-        ui.messageBox(
-            'Twizzle built.\n\n'
-            'Spacers to print: %d (plus the base)\n'
-            'Clamp screw: M4 x %d (needs at least %.1f mm) + M4 nut\n'
-            'Dome screws: 2 x M3 x 20 from the back\n'
-            'Motor: 2 cable ties, up to %.1f mm wide, round the motor and saddle\n'
-            'Board screws: 4 x M3 x 6 (or M2.5)\n\n'
-            'Parts marked "do not print" are for checking fit only.'
-            % (n, int(math.ceil(screw / 5.0) * 5), screw, TIE_W - 0.5))
+        ui.messageBox('Twizzle built.\n\n' + hardware_summary() +
+                      '\n\nParts marked "do not print" are for checking fit only.')
     except Exception:
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
