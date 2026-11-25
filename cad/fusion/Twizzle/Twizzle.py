@@ -295,9 +295,12 @@ class Builder:
         arcs = sk.sketchCurves.sketchArcs
         first = None
         prev = None
-        for s in segs:
+        start_xy = segs[0][1]
+        for n, s in enumerate(segs):
             start = prev if prev is not None else self.P(sk, *to3(s[1]))
-            end = self.P(sk, *to3(s[-1]))
+            closes = n == len(segs) - 1 and first is not None and \
+                abs(s[-1][0] - start_xy[0]) < 1e-6 and abs(s[-1][1] - start_xy[1]) < 1e-6
+            end = first if closes else self.P(sk, *to3(s[-1]))
             if s[0] == 'L':
                 ent = lines.addByTwoPoints(start, end)
             else:
@@ -628,6 +631,16 @@ def build_reference(root, wall_z):
 
 # ---------------------------------------------------------------------------
 
+def tidy(root):
+    """Hide the helper planes and sketches so only the parts show."""
+    for i in range(root.occurrences.count):
+        comp = root.occurrences.item(i).component
+        for j in range(comp.constructionPlanes.count):
+            comp.constructionPlanes.item(j).isLightBulbOn = False
+        for j in range(comp.sketches.count):
+            comp.sketches.item(j).isVisible = False
+
+
 def run(context):
     app = adsk.core.Application.get()
     ui = app.userInterface
@@ -636,7 +649,6 @@ def run(context):
         design = adsk.fusion.Design.cast(app.activeProduct)
         design.designType = adsk.fusion.DesignTypes.ParametricDesignType
         root = design.rootComponent
-        root.name = 'Twizzle'
 
         n = spacer_count()
         build_tray(root)
@@ -646,6 +658,7 @@ def run(context):
         build_switch_plug(root)
         _, base_back = build_mount(root, n)
         build_reference(root, base_back - STRIP_T)
+        tidy(root)
 
         head_seat = base_back + M4_HEAD_H + 0.2
         nut_top = TRAY_FLOOR + 4.5
