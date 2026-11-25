@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+*.log
+.venv/
+venv/
+
+# Exported meshes and slicer files are built from the script
+*.stl
+*.3mf
+*.gcode
+
+# ESPHome secrets and build output
+secrets.yaml
+.esphome/
+
+# Secrets
+.env
+*.key
+*.pem
+id_*
+
+# Full-size photos with location data stay local
+docs/build-log/originals/
