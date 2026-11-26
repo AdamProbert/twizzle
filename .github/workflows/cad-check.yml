@@ -1,0 +1,36 @@
+name: CAD check
+
+on:
+  push:
+    paths:
+      - 'cad/**'
+      - '.github/workflows/cad-check.yml'
+  pull_request:
+    paths:
+      - 'cad/**'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: cad/check/requirements.txt
+      - name: Install CadQuery
+        run: |
+          sudo apt-get update && sudo apt-get install -y libgl1 libegl1
+          pip install -r cad/check/requirements.txt
+      - name: Run the model tests
+        run: pytest cad/check -v
+      - name: Build STLs and renders
+        if: always()
+        run: python cad/check/check.py cad/check/out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: twizzle-stl-and-renders
+          path: cad/check/out

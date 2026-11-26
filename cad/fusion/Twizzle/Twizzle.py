@@ -34,12 +34,14 @@ except ImportError:          # running outside Fusion (cad/check)
 
 # Printing
 CLEAR = 0.2                 # general sliding clearance per side (PLA/PETG, 0.4 nozzle)
+MIN_WALL = 1.2              # self-check: thinnest wall allowed (3 lines at 0.4 mm)
+MIN_ENGAGE = 3.5            # self-check: least thread a screw must have in its insert
 
 # Fasteners: M3 everywhere, into brass heat-set inserts
 INSERT_D = 4.2              # pocket diameter (PokePi coupon: fitted perfectly)
 INSERT_L = 5.7              # MEASURE: insert length
 INSERT_DEPTH = INSERT_L + 1.0
-INSERT_BOSS_D = 8.4         # boss round an insert pocket (2.1 mm wall)
+INSERT_BOSS_D = 8.6         # boss round an insert pocket (2.2 mm wall; 1.2 mm round a counterbore)
 M3_CLEAR = 3.4
 M3_HEAD_D = 5.5             # socket head
 M3_HEAD_H = 3.0
@@ -202,6 +204,33 @@ def board_holes():
     bx, by = BOARD_CENTRE
     return {(sx, sy): (bx + sx * BOARD_HOLE_DX / 2, by + sy * BOARD_HOLE_DY / 2)
             for sx in (-1, 1) for sy in (-1, 1)}
+
+
+def centre_boss_top():
+    return INSERT_DEPTH + MIN_WALL
+
+
+def dome_outer_z(r):
+    """Height of the dome's outer surface at radius r (ignores the small rounds)."""
+    rb = R - BEVEL
+    return PUCK_DEPTH if r <= rb else PUCK_DEPTH - (r - rb)
+
+
+def fasteners():
+    """Every screw and the insert it goes into. z values: head = underside of the head,
+    tip = end of the shaft, entry = the insert's top face; dir = +1 if the shaft runs up."""
+    out = []
+    for x, y in DOME_SCREWS:
+        head = M3_HEAD_H + M3_CB_SINK
+        out.append(dict(name='dome screw at (%g, %g)' % (x, y), x=x, y=y, length=20, dir=1, head=head,
+                        tip=head + 20, entry=WAND_Z, part='Dome'))
+    out.append(dict(name='mount screw', x=0.0, y=0.0, length=8, dir=1, head=-MOUNT_WEB,
+                    tip=-MOUNT_WEB + 8, entry=0.0, part='Tray'))
+    for hx, hy in board_screw_holes()[0]:
+        head = BOARD_Z + 1.6
+        out.append(dict(name='board screw at (%g, %g)' % (hx, hy), x=hx, y=hy, length=6, dir=-1, head=head,
+                        tip=head - 6, entry=BOARD_Z, part='Tray'))
+    return out
 
 
 def board_screw_holes():
@@ -391,7 +420,7 @@ def build_tray(b):
         feats.append(b.cyl_z(x, y, fl - 0.5, WAND_Z - fl + 0.5, INSERT_BOSS_D / 2, 'new'))
 
     # centre boss: insert for the mount screw, pressed in from the back
-    feats.append(b.cyl_z(0, 0, fl - 0.5, INSERT_DEPTH + 0.8 - fl + 0.5, INSERT_BOSS_D / 2, 'new'))
+    feats.append(b.cyl_z(0, 0, fl - 0.5, centre_boss_top() - fl + 0.5, INSERT_BOSS_D / 2, 'new'))
 
     # C3 SuperMini frame (a dab of hot glue holds the board in it)
     cx, cy = C3_CENTRE
@@ -613,7 +642,10 @@ def build_reference(b):
     out['motor'] = m
     bx, by = BOARD_CENTRE
     out['board'] = b.box(bx - BOARD_W / 2, bx + BOARD_W / 2, by - BOARD_H / 2, by + BOARD_H / 2, BOARD_Z, BOARD_Z + 1.6, 'new', name='ULN2003 board')
-    out['board parts'] = b.box(bx - BOARD_W / 2 + 1, bx + BOARD_W / 2 - 1, by - BOARD_H / 2 + 5, by + BOARD_H / 2 - 1,
+    for hx, hy in board_holes().values():
+        b.cyl_z(hx, hy, BOARD_Z - 1, 3.6, BOARD_HOLE_D / 2, 'cut', out['board'])
+    # the parts on top keep 5 mm in from the edges, clear of the mounting holes
+    out['board parts'] = b.box(bx - BOARD_W / 2 + 5, bx + BOARD_W / 2 - 5, by - BOARD_H / 2 + 5, by + BOARD_H / 2 - 5,
                                BOARD_Z + 1.6, BOARD_Z + 1.6 + BOARD_COMP_H, 'new', name='board parts (envelope)')
     cx, cy = C3_CENTRE
     out['c3'] = b.box(cx - C3_W / 2, cx + C3_W / 2, cy - C3_H / 2, cy + C3_H / 2, TRAY_FLOOR, TRAY_FLOOR + C3_T, 'new', name='ESP32-C3 SuperMini')
@@ -627,27 +659,17 @@ def build_reference(b):
                        'new', name='USB-C socket')
     # hardware: inserts and screws
     hw = []
-    def insert(x, y, z0, up):
-        i = b.cyl_z(x, y, z0 if up else z0 - INSERT_L, INSERT_L, INSERT_D / 2 - 0.1, 'new', name='insert')
-        b.cyl_z(x, y, z0 - 10, 20, 1.55, 'cut', i)
+    for f in fasteners():
+        d = f['dir']
+        lo, hi = sorted((f['entry'], f['entry'] + d * INSERT_L))
+        i = b.cyl_z(f['x'], f['y'], lo, hi - lo, INSERT_D / 2 - 0.1, 'new', name='insert')
+        b.cyl_z(f['x'], f['y'], lo - 1, hi - lo + 2, 1.55, 'cut', i)
         hw.append(i)
-    def screw(x, y, z_head, length, up, name):
-        # z_head: underside of the head; shaft runs up (or down) from it
-        if up:
-            s = b.cyl_z(x, y, z_head - M3_HEAD_H, M3_HEAD_H, M3_HEAD_D / 2, 'new', name=name)
-            b.cyl_z(x, y, z_head, length, 1.45, 'join', s)
-        else:
-            s = b.cyl_z(x, y, z_head, M3_HEAD_H, M3_HEAD_D / 2, 'new', name=name)
-            b.cyl_z(x, y, z_head - length, length, 1.45, 'join', s)
+        head0, head1 = sorted((f['head'], f['head'] - d * M3_HEAD_H))
+        s = b.cyl_z(f['x'], f['y'], head0, head1 - head0, M3_HEAD_D / 2, 'new', name='M3x%d' % f['length'])
+        lo, hi = sorted((f['head'], f['tip']))
+        b.cyl_z(f['x'], f['y'], lo, hi - lo, 1.45, 'join', s)
         hw.append(s)
-    for x, y in DOME_SCREWS:
-        insert(x, y, WAND_Z, True)
-        screw(x, y, M3_HEAD_H + M3_CB_SINK, 20, True, 'M3x20')
-    insert(0, 0, 0, True)
-    screw(0, 0, -MOUNT_WEB, 8, True, 'M3x8')
-    for hx, hy in board_screw_holes()[0]:
-        insert(hx, hy, BOARD_Z, False)
-        screw(hx, hy, BOARD_Z + 1.6, 6, False, 'M3x6')
     out['hardware'] = hw
     wall_z = -MOUNT_H - (STRIP_T - STRIP_RECESS)
     out['wall'] = b.box(-80, 80, -80, 80, wall_z - 3, wall_z, 'new', name='wall')
@@ -672,6 +694,131 @@ def hardware_summary():
             'Heat-set inserts: 6 x M3 (%.1f mm pockets)\n'
             'Motor: snip the ears; the tray and dome clamp it, no ties\n'
             'Mount height: %.1f mm' % (INSERT_D, MOUNT_H))
+
+
+# ---------------------------------------------------------------------------
+# Self-check. Runs after every build, in Fusion and in cad/check (pytest).
+#
+# The probe answers questions about the built model:
+#   probe.inside(part, x, y, z)  -> True if the point is inside that printed part
+#   probe.centre(part)           -> (x, y, z) centre of mass
+#   probe.interference()         -> [(body name, body name, overlap mm^3), ...]
+# ---------------------------------------------------------------------------
+
+PRINTED = ['Tray', 'Dome', 'Wand gear', 'Motor pinion', 'Switch plug', 'Mount']
+EXPECTED_CONTACT = {frozenset(('Mount', 'USB-C socket'))}   # the 0.2 mm pinch
+INTERFERENCE_TOL = 0.1      # mm^3; touching faces can show a sliver
+
+
+def wall_list():
+    """(name, thickness) for every wall that the parameters decide."""
+    hex_corner = (WAND_AF + WAND_FIT) / math.sqrt(3)
+    dome_caps = [dome_outer_z(math.hypot(x, y) + INSERT_BOSS_D / 2) - (WAND_Z + INSERT_DEPTH) for x, y in DOME_SCREWS]
+    return [
+        ('insert boss round its pocket', (INSERT_BOSS_D - INSERT_D) / 2),
+        ('screw pillar round its counterbore', (INSERT_BOSS_D - M3_CB_D) / 2),
+        ('tray side wall', TRAY_WALL),
+        ('dome shell', SHELL),
+        ('dome lip', LIP_T),
+        ('tray floor under the index grooves', TRAY_FLOOR - (RIDGE_H + 0.2)),
+        ('tray boss over the mount insert', centre_boss_top() - INSERT_DEPTH),
+        ('tray floor under the board inserts', BOARD_Z - INSERT_DEPTH),
+        ('dome over its insert pockets', min(dome_caps)),
+        ('wand gear hub round the hex', HUB_R - hex_corner),
+        ('pinion round the D bore', GEAR_ROOT_R - (MOTOR_SHAFT_D + PINION_FIT) / 2),
+        ('gear bearing wall', BEARING_WALL),
+        ('mount side wall', MOUNT_WALL),
+        ('mount wall in front of the USB socket', USB_FACE_T),
+        ('mount web under the clamp screw', MOUNT_WEB),
+        ('mount back under the strip pockets', MOUNT_BASE - STRIP_RECESS),
+        ('mount post round the screw bore', MOUNT_POST_R - M3_CB_D / 2),
+        ('switch socket wall', 1.6),
+    ]
+
+
+def self_check(probe):
+    """Returns [(group, ok, detail)]."""
+    res = []
+
+    # 1. interference
+    try:
+        hits = [(a, b, v) for a, b, v in probe.interference()
+                if v > INTERFERENCE_TOL and frozenset((a, b)) not in EXPECTED_CONTACT
+                and not (a.startswith(('M3', 'insert')) and b.startswith(('M3', 'insert')))]
+        if hits:
+            for a, b, v in hits:
+                res.append(('Interference', False, '%s and %s overlap by %.2f mm3' % (a, b, v)))
+        else:
+            res.append(('Interference', True, 'no parts overlap (the USB pinch is expected)'))
+    except Exception as e:                       # keep the build even if the API call fails
+        res.append(('Interference', False, 'could not run: %s' % e))
+
+    # 2. wall thickness
+    thin = [(n, t) for n, t in wall_list() if t < MIN_WALL - 1e-6]
+    for n, t in thin:
+        res.append(('Wall thickness', False, '%s is %.2f mm (min %.1f)' % (n, t, MIN_WALL)))
+    if not thin:
+        n, t = min(wall_list(), key=lambda w: w[1])
+        res.append(('Wall thickness', True, 'all %d walls >= %.1f mm (thinnest: %s, %.2f)' % (len(wall_list()), MIN_WALL, n, t)))
+
+    # 3. gears
+    want = GEAR_MODULE * (GEAR_TEETH + GEAR_TEETH) / 2
+    g, p = probe.centre('Wand gear'), probe.centre('Motor pinion')
+    cd = math.hypot(g[0] - p[0], g[2] - p[2])
+    res.append(('Gear centre distance', abs(cd - want) < 0.05 and abs(g[1] - p[1]) < 0.05,
+                '%.3f mm (should be %.3f), faces offset %.3f mm' % (cd, want, abs(g[1] - p[1]))))
+    f0 = MOTOR_FACE_Y - MOTOR_SHAFT_LEN
+    f1 = f0 + MOTOR_FLAT_LEN
+    on = GEAR_Y - GEAR_FACE / 2 >= f0 - 1e-6 and GEAR_Y + GEAR_FACE / 2 <= f1 + 1e-6
+    res.append(('Gear centre distance', on, 'pinion %s on the shaft flats' % ('sits' if on else 'does NOT sit')))
+
+    # 4. bolts line up with inserts
+    for f in fasteners():
+        problems = []
+        d = f['dir']
+        # thread in the insert, and the tip stops short of the pocket bottom
+        ins = sorted((f['entry'], f['entry'] + d * INSERT_L))
+        shaft = sorted((f['head'], f['tip']))
+        engage = min(ins[1], shaft[1]) - max(ins[0], shaft[0])
+        if engage < MIN_ENGAGE:
+            problems.append('only %.1f mm in the insert' % engage)
+        if (f['tip'] - f['entry']) * d > INSERT_DEPTH - 0.3:
+            problems.append('tip hits the bottom of the pocket')
+        # clear path for the shaft and head through every printed part
+        pts = []
+        n = max(2, int(abs(f['tip'] - f['head'])))
+        for i in range(n + 1):
+            z = f['head'] + d * (0.3 + (abs(f['tip'] - f['head']) - 0.6) * i / n)
+            pts.append((f['x'], f['y'], z))
+            for a in range(4):
+                t = math.pi / 2 * a + math.pi / 4
+                pts.append((f['x'] + 1.5 * math.cos(t), f['y'] + 1.5 * math.sin(t), z))
+        zh = f['head'] - d * M3_HEAD_H / 2
+        for a in range(4):
+            t = math.pi / 2 * a
+            pts.append((f['x'] + (M3_HEAD_D / 2 - 0.1) * math.cos(t), f['y'] + (M3_HEAD_D / 2 - 0.1) * math.sin(t), zh))
+        blocked = sorted({part for part in PRINTED for pt in pts if probe.inside(part, *pt)})
+        if blocked:
+            problems.append('hole blocked by %s' % ', '.join(blocked))
+        # plastic all round the insert
+        zm = f['entry'] + d * INSERT_L / 2
+        rr = INSERT_D / 2 + 1.0
+        missing = sum(1 for a in range(6)
+                      if not probe.inside(f['part'], f['x'] + rr * math.cos(a * math.pi / 3), f['y'] + rr * math.sin(a * math.pi / 3), zm))
+        if missing:
+            problems.append('insert boss missing on %d of 6 sides' % missing)
+        res.append(('Bolts and inserts', not problems,
+                    '%s (M3x%d): %s' % (f['name'], f['length'], '; '.join(problems) if problems else
+                                        'clear hole, %.1f mm in the insert' % engage)))
+    return res
+
+
+def format_report(res):
+    fails = [r for r in res if not r[1]]
+    lines = ['Self-check: %s (%d checks, %d failed)' % ('PASS' if not fails else 'FAIL', len(res), len(fails)), '']
+    for group, ok, detail in res:
+        lines.append('%s  %s: %s' % ('PASS' if ok else 'FAIL', group, detail))
+    return '\n'.join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -845,6 +992,32 @@ class FusionBuilder:
         return target
 
 
+class FusionProbe:
+    def __init__(self, design, printed, everything):
+        self.design = design
+        self.printed = printed
+        self.everything = everything
+
+    def inside(self, part, x, y, z):
+        pc = self.printed[part].pointContainment(adsk.core.Point3D.create(cm(x), cm(y), cm(z)))
+        return pc == adsk.fusion.PointContainment.PointInsidePointContainment
+
+    def centre(self, part):
+        p = self.printed[part].physicalProperties.centerOfMass
+        return (p.x * 10, p.y * 10, p.z * 10)
+
+    def interference(self):
+        col = adsk.core.ObjectCollection.create()
+        for b in self.everything:
+            col.add(b)
+        inp = self.design.createInterferenceInput(col)
+        inp.areCoincidentFacesIncluded = False
+        out = []
+        for r in self.design.analyzeInterference(inp):
+            out.append((r.entityOne.name, r.entityTwo.name, r.interferenceBody.volume * 1000.0))
+        return out
+
+
 def tidy(root):
     """Hide the helper planes, sketches and leftover tool bodies so only the parts show."""
     for i in range(root.occurrences.count):
@@ -867,12 +1040,21 @@ def run(context):
         design = adsk.fusion.Design.cast(app.activeProduct)
         design.designType = adsk.fusion.DesignTypes.ParametricDesignType
         root = design.rootComponent
+        printed = {}
+        everything = []
         for name, fn in PARTS:
             occ = root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
             occ.component.name = name
-            fn(FusionBuilder(occ.component))
+            out = fn(FusionBuilder(occ.component))
+            if not isinstance(out, dict):
+                printed[name.split(' (')[0]] = out
+            for j in range(occ.component.bRepBodies.count):
+                body = occ.component.bRepBodies.item(j)
+                if body.name not in ('tray envelope', 'dome void', 'wall'):
+                    everything.append(body.createForAssemblyContext(occ))
         tidy(root)
-        ui.messageBox('Twizzle built.\n\n' + hardware_summary() +
+        report = format_report(self_check(FusionProbe(design, printed, everything)))
+        ui.messageBox('Twizzle built.\n\n' + report + '\n\n' + hardware_summary() +
                       '\n\nParts marked "do not print" are for checking fit only.')
     except Exception:
         if ui:

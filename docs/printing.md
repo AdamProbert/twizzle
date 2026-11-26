@@ -55,9 +55,19 @@ The mount height is worked out from `WAND_WALL_GAP`: the wand ends up `STRIP_T -
 
 ## Checking the model
 
+Every Fusion build ends with a self-check in the "Twizzle built" box. Each line is PASS or FAIL:
+
+- **Interference:** Fusion's own interference analysis over every body, printed and bought. The USB socket's 0.2 mm pinch is the one expected overlap.
+- **Wall thickness:** every wall the parameters set (insert bosses, shells, lips, floors over pockets, the gear hubs round their bores, the mount web) must be at least `MIN_WALL` (1.2 mm, three lines at 0.4 mm).
+- **Gear centre distance:** measured between the two gears' centres of mass, and the pinion has to sit on the shaft flats.
+- **Bolts and inserts:** for every screw, the shaft and head path must be clear through every printed part, there must be plastic all round its insert, the screw must reach `MIN_ENGAGE` (3.5 mm) into the insert, and its tip must stop short of the pocket bottom.
+
+The same checks, plus "one solid per part" and "prints without supports", run as tests in CadQuery:
+
 ```
-pip install cadquery
-python cad/check/check.py
+pip install -r cad/check/requirements.txt
+pytest cad/check
+python cad/check/check.py      # full report, STLs in print orientation, renders
 ```
 
-It runs the same part code as the Fusion script, then reports parts that overlap each other or the bought parts, printed parts that come out in more than one piece, and down-facing faces in each part's print orientation. STLs and a few renders go in `cad/check/out/`. The expected overlaps are the board pins and screws (the reference board has no holes) and the USB socket's 0.2 mm pinch.
+A GitHub Action (`.github/workflows/cad-check.yml`) runs the tests on every push that touches `cad/`, and attaches the STLs to the run.
