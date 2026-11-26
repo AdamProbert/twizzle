@@ -73,7 +73,7 @@ GEAR_TEETH = 20
 GEAR_FACE = 6.0
 GEAR_ADDENDUM = 0.85        # x module; slightly short teeth print stronger tips
 GEAR_BACKLASH = 0.2
-GEAR_Y = -29.0              # centre of the gear pair along the wand (front view, -y = up)
+GEAR_Y = -29.0              # centre of the gear pair along the wand (+y is up in Fusion, so the gears sit low)
 HUB_R = 7.5                 # wand gear journals, one each side
 HUB_L = 4.0
 JOURNAL_CLEAR = 0.25        # per side, journal in its bearing
@@ -141,7 +141,7 @@ RIDGES = 72                 # 5 degree steps
 RIDGE_R = (41.0, 44.0)
 RIDGE_DEG = 1.8             # ridge width in degrees
 RIDGE_H = 0.8
-WIRE_HOLE = (-20.0, 28.0)   # pigtail wires come up through the tray floor here
+WIRE_HOLE = (-30.0, -18.5)  # pigtail wires come up through the tray floor here, near the socket
 WIRE_HOLE_D = 7.0
 
 # USB-C pigtail socket, pinched between the mount and the tray back
@@ -152,7 +152,8 @@ USB_PINCH = 0.2             # pocket is this much shallower than the socket
 USB_FACE_T = 1.6            # wall in front of the socket; the plug reaches through a window
 USB_WIN_W = 13.5            # window for a USB-C plug's overmould
 USB_WIN_H = 7.5
-USB_X = 0.0                 # bottom of the mount, centred
+USB_X = 0.0                 # centred
+USB_SIDE = -1               # -1 puts it on the -y edge: the bottom, with Fusion's default Y-up view
 
 
 # ---------------------------------------------------------------------------
@@ -570,20 +571,21 @@ def build_mount(b):
     # USB-C socket cradle at the bottom: drops in from the top, the tray back pinches it
     # The socket is a plain moulded block with no flange, so it's captive: a front wall
     # with a window for the plug, a back stop, and the tray back pressing down on it.
+    s = USB_SIDE
     fy = usb_flat_y()
     uy = usb_face_y()
     hw = USB_W / 2 + CLEAR
     back = uy - USB_DEPTH - 0.2
     zt = -(USB_T - USB_PINCH)
-    b.box(USB_X - hw - 2, USB_X + hw + 2, back - 2, R, -H + 1, 0, 'join', body)
-    b.box(USB_X - hw, USB_X + hw, back, uy, zt, 1, 'cut', body)
+    b.box(USB_X - hw - 2, USB_X + hw + 2, s * (back - 2), s * R, -H + 1, 0, 'join', body)
+    b.box(USB_X - hw, USB_X + hw, s * back, s * uy, zt, 1, 'cut', body)
     # window for the plug's overmould
-    b.box(USB_X - USB_WIN_W / 2, USB_X + USB_WIN_W / 2, uy - 0.5, R + 1,
+    b.box(USB_X - USB_WIN_W / 2, USB_X + USB_WIN_W / 2, s * (uy - 0.5), s * (R + 1),
           zt / 2 - USB_WIN_H / 2, zt / 2 + USB_WIN_H / 2, 'cut', body)
     # slot in the back stop for the wires
-    b.box(USB_X - 3, USB_X + 3, back - 3, back + 0.1, zt / 2 - 3, 1, 'cut', body)
+    b.box(USB_X - 3, USB_X + 3, s * (back - 3), s * (back + 0.1), zt / 2 - 3, 1, 'cut', body)
     # flat on the outside
-    b.box(USB_X - hw - 3, USB_X + hw + 3, fy, R + 1, -H - 1, 1, 'cut', body)
+    b.box(USB_X - hw - 3, USB_X + hw + 3, s * fy, s * (R + 1), -H - 1, 1, 'cut', body)
 
     # clamp screw: M3 x 8 from the back, head on the web under the tray
     b.cyl_z(0, 0, -H - 1, H + 1 - MOUNT_WEB, M3_CB_D / 2, 'cut', body)
@@ -621,7 +623,8 @@ def build_reference(b):
     b.cyl_z(sx, sy, swb + 4, SW_TOTAL_H - 4, SW_CAP_D / 2, 'join', s)
     out['switch'] = s
     uy = usb_face_y()
-    out['usb'] = b.box(USB_X - USB_W / 2, USB_X + USB_W / 2, uy - USB_DEPTH, uy, -USB_T, 0, 'new', name='USB-C socket')
+    out['usb'] = b.box(USB_X - USB_W / 2, USB_X + USB_W / 2, USB_SIDE * (uy - USB_DEPTH), USB_SIDE * uy, -USB_T, 0,
+                       'new', name='USB-C socket')
     # hardware: inserts and screws
     hw = []
     def insert(x, y, z0, up):
