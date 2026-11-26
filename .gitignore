@@ -24,3 +24,6 @@ docs/build-log/originals/
 
 # Check script output
 cad/check/out/
+
+# Editor settings
+.vscode/
