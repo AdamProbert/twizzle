@@ -1,0 +1,225 @@
+# Twizzle: ESPHome firmware for the blind tilt puck.
+# ESP32-C3 SuperMini + ULN2003 board + 28BYJ-48, wand driven 1:1 by a 20T/20T gear pair.
+# Shows up in Home Assistant as a "blind" cover: 0% = closed, 100% = open.
+# Pins match docs/wiring.md. Button controls match the README.
+
+substitutions:
+  name: twizzle
+  friendly_name: Twizzle
+  # Half steps for one turn of the wand. 28BYJ-48 is ~4096 half steps per output
+  # turn, and the gears are 1:1.
+  steps_per_turn: "4096"
+  # How many wand turns from "closed" to "open". Measure yours and edit.
+  open_turns: "7.0"
+  # Extra turns driven past "closed" every time it fully closes, to re-zero
+  # against the blind's own end stop. Keep it small.
+  overtravel_turns: "0.25"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    priority: -100
+    then:
+      # Restore the last known position so a reboot doesn't move the blind.
+      - stepper.report_position:
+          id: tilt
+          position: !lambda "return id(saved_steps);"
+      - stepper.set_target:
+          id: tilt
+          target: !lambda "return id(saved_steps);"
+      - cover.template.publish:
+          id: blind
+          position: !lambda "return clamp(id(saved_steps) / (${open_turns} * ${steps_per_turn}), 0.0, 1.0);"
+          current_operation: IDLE
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${name} fallback"
+
+captive_portal:
+
+globals:
+  - id: saved_steps
+    type: int
+    restore_value: true
+    initial_value: "0"
+  - id: last_dir_open
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+stepper:
+  - platform: uln2003
+    id: tilt
+    pin_a: GPIO4   # IN1
+    pin_b: GPIO5   # IN2
+    pin_c: GPIO6   # IN3
+    pin_d: GPIO7   # IN4
+    step_mode: HALF_STEP
+    # Coils off when idle: no heat, no hum, and the wand still turns by hand.
+    sleep_when_done: true
+    # ~10 rpm, so 7 turns takes about 40 s. The 28BYJ-48 skips above ~15 rpm.
+    max_speed: 700 steps/s
+    acceleration: 1000 steps/s^2
+    deceleration: 1000 steps/s^2
+
+script:
+  - id: move_to
+    mode: restart
+    parameters:
+      pos: float          # 0.0 = closed, 1.0 = open
+    then:
+      - lambda: |-
+          const int open_steps = (int) (${open_turns} * ${steps_per_turn});
+          int target = (int) roundf(pos * open_steps);
+          if (pos <= 0.005f) {
+            // Closing: drive a little past zero to re-home against the end stop.
+            target = -(int) (${overtravel_turns} * ${steps_per_turn});
+          }
+          id(last_dir_open) = target > id(tilt).current_position;
+          id(tilt).set_target(target);
+      - cover.template.publish:
+          id: blind
+          current_operation: !lambda "return id(last_dir_open) ? COVER_OPERATION_OPENING : COVER_OPERATION_CLOSING;"
+      - wait_until:
+          condition:
+            lambda: "return id(tilt).has_reached_target();"
+      - if:
+          condition:
+            lambda: "return id(tilt).current_position < 0;"
+          then:
+            # We were closing and have gone past the stop: call this zero.
+            - stepper.report_position: {id: tilt, position: 0}
+            - stepper.set_target: {id: tilt, target: 0}
+      - globals.set:
+          id: saved_steps
+          value: !lambda "return id(tilt).current_position;"
+      - cover.template.publish:
+          id: blind
+          position: !lambda "return clamp(id(tilt).current_position / (${open_turns} * ${steps_per_turn}), 0.0, 1.0);"
+          current_operation: IDLE
+
+  - id: stop_here
+    then:
+      - script.stop: move_to
+      - stepper.set_target:
+          id: tilt
+          target: !lambda "return id(tilt).current_position;"
+      - globals.set:
+          id: saved_steps
+          value: !lambda "return id(tilt).current_position;"
+      - cover.template.publish:
+          id: blind
+          position: !lambda "return clamp(id(tilt).current_position / (${open_turns} * ${steps_per_turn}), 0.0, 1.0);"
+          current_operation: IDLE
+
+  - id: set_closed
+    then:
+      - script.stop: move_to
+      - stepper.report_position: {id: tilt, position: 0}
+      - stepper.set_target: {id: tilt, target: 0}
+      - globals.set: {id: saved_steps, value: "0"}
+      - cover.template.publish: {id: blind, position: 0.0, current_operation: IDLE}
+
+cover:
+  - platform: template
+    id: blind
+    name: None              # entity takes the device name, "Twizzle"
+    device_class: blind
+    has_position: true
+    optimistic: false
+    open_action:
+      - script.execute: {id: move_to, pos: 1.0}
+    close_action:
+      - script.execute: {id: move_to, pos: 0.0}
+    position_action:
+      - script.execute: {id: move_to, pos: !lambda "return pos;"}
+    stop_action:
+      - script.execute: stop_here
+
+# Live position updates while it moves, so the HA slider tracks it.
+interval:
+  - interval: 500ms
+    then:
+      - if:
+          condition:
+            lambda: "return !id(tilt).has_reached_target();"
+          then:
+            - cover.template.publish:
+                id: blind
+                position: !lambda "return clamp(id(tilt).current_position / (${open_turns} * ${steps_per_turn}), 0.0, 1.0);"
+
+# Front button. Works without Wi-Fi.
+#   Tap: open or close (toggles). Tap while moving: stop.
+#   Double tap: half open.
+#   Hold 3 s: set the current position as closed.
+binary_sensor:
+  - platform: gpio
+    id: front_button
+    name: Button
+    pin:
+      number: GPIO10
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+    filters:
+      - delayed_on: 20ms
+      - delayed_off: 20ms
+    on_multi_click:
+      - timing:
+          - ON for at least 3s
+        then:
+          - script.execute: set_closed
+      - timing:
+          - ON for at most 0.5s
+          - OFF for at most 0.4s
+          - ON for at most 0.5s
+          - OFF for at least 0.2s
+        then:
+          - script.execute: {id: move_to, pos: 0.5}
+      - timing:
+          - ON for at most 0.5s
+          - OFF for at least 0.4s
+        then:
+          - if:
+              condition:
+                lambda: "return !id(tilt).has_reached_target();"
+              then:
+                - script.execute: stop_here
+              else:
+                - if:
+                    condition:
+                      lambda: "return id(blind).position > 0.5f;"
+                    then:
+                      - script.execute: {id: move_to, pos: 0.0}
+                    else:
+                      - script.execute: {id: move_to, pos: 1.0}
+
+button:
+  # Same as holding the front button for 3 s: turn the wand by hand to fully
+  # closed, then press this.
+  - platform: template
+    name: Set current position as closed
+    entity_category: config
+    on_press:
+      - script.execute: set_closed
