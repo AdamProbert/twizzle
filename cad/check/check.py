@@ -132,6 +132,8 @@ def render_all(parts, ref, out):
     render('4_assembly.png', ['Dome', 'Tray', 'Mount', 'wand', 'usb'], (140, 160, 120), (0, 0, 0), up=(0, 1, 0))
     render('5_mount.png', ['Mount', 'usb', 'hardware'], (60, 140, 120), (0, 0, -15), up=(0, 1, 0))
     render('6_mount_back.png', ['Mount'], (40, 60, -160), (0, 0, -15), up=(0, 1, 0))
+    render('8_bottom.png', ['Dome', 'Tray', 'Mount', 'usb'], (30, -170, 60), (0, 0, 0), up=(0, 0, 1))
+    render('9_top.png', ['Dome', 'Tray', 'Mount'], (30, 170, 60), (0, 0, 0), up=(0, 0, 1))
     render('7_section_gear.png', ['Tray', 'Dome', 'Wand gear', 'Motor pinion', 'wand', 'motor'],
            (-160, -60, 60), (0, -25, 19), up=(0, 0, 1), opacity={'Dome': 0.35, 'Tray': 0.6})
 

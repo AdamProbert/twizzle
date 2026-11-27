@@ -52,6 +52,8 @@ M3_CB_SINK = 0.5            # head sits this far below the surface
 WAND_AF = 7.0               # MEASURE: across the flats
 WAND_AC = WAND_AF * 2 / math.sqrt(3)   # across the corners (8.08 for a 7.0 hex)
 WAND_FIT = 0.4              # extra on the gear's hex bore so the wand slides through
+WAND_LEAD = 1.2             # 45 degree lead-in on each end of the gear's hex bore
+WAND_FUNNEL = 2.5           # 45 degree funnel on the wand ports, so the rod finds its way in
 WAND_PORT_CLEAR = 1.5       # the case never touches the wand: the gear's journals carry it
 WAND_WALL_GAP = 50.0        # centre of the wand to the wall (Adam: ~5 cm)
 
@@ -123,6 +125,7 @@ SW_TOTAL_H = 11.0           # MEASURE: bottom of switch body to top of fitted ca
 SW_CAP_D = 12.0             # MEASURE: cap diameter
 SW_CAP_PROUD = 1.0          # how far the cap stands proud of the dome
 SW_POS = (14.0, 22.0)
+SW_CLEAR = 0.3               # square socket round the switch body (0.2 was too tight on the first print)
 SW_PLUG_T = 3.0             # printed plug that backs the switch so it can't be pushed in
 
 # Dome screws: M3 x 20 from the back of the tray into inserts in the dome
@@ -133,6 +136,8 @@ STRIP_T = 2.0               # MEASURE: Command strip pair thickness when pressed
 STRIP_W = 19.0              # MEASURE: Medium picture-hanging strip
 STRIP_L = 70.0              # MEASURE
 STRIP_RECESS = 1.0          # strips sit this deep in the back
+STRIP_RIB_W = 0.5           # break-away support ribs in the strip pockets (one line wide)
+STRIP_RIB_PITCH = 6.0       # rib spacing, so the pocket ceilings are short bridges
 STRIP_Y = 13.0              # strip centre lines, above and below the middle
 MOUNT_WALL = 2.4
 MOUNT_BASE = 3.0
@@ -174,6 +179,8 @@ TOOTH_CHAMFER = GEAR_TIP_R - GEAR_ROOT_R          # 45 degree chamfer on the wan
 WAND_PORT_R = WAND_AC / 2 + WAND_PORT_CLEAR
 BEARING_R = HUB_R + JOURNAL_CLEAR
 BEARING_HALF_W = BEARING_R + BEARING_WALL
+PORT_BLOCK_Y0 = 31.0                              # inner face of the solid round the far wand port
+PORT_BLOCK_HALF_W = 7.0
 MOUNT_H = WAND_WALL_GAP - WAND_Z - (STRIP_T - STRIP_RECESS)
 BOARD_Z = TRAY_FLOOR + BOARD_STANDOFF
 
@@ -406,6 +413,7 @@ def build_tray(b):
 
     # motor cradle (bottom half)
     feats.append(motor_block(b, fl - 0.5, WAND_Z))
+    feats.append(port_block(b, fl - 0.5, WAND_Z))
 
     # board standoffs: two with inserts, two with locating pins
     screws, pins = board_screw_holes()
@@ -442,6 +450,7 @@ def build_tray(b):
     for y0, y1 in bearing_spans():
         b.cyl_y(WAND_X, WAND_Z, (y0 + y1) / 2, y1 - y0 + 0.02, BEARING_R, 'cut', body)
     b.cyl_y(WAND_X, WAND_Z, 0, PUCK_D + 20, WAND_PORT_R, 'cut', body)
+    wand_port_funnels(b, body)
     # motor
     motor_cuts(b, body)
     # board: insert pockets
@@ -498,11 +507,12 @@ def build_dome(b):
         feats.append(f)
     # motor cap
     feats.append(motor_block(b, WAND_Z, top))
+    feats.append(port_block(b, WAND_Z, top))
     # button socket
     sx, sy = SW_POS
     sw_bottom = PUCK_DEPTH + SW_CAP_PROUD - SW_TOTAL_H
     sock_bottom = sw_bottom - SW_PLUG_T - 0.5
-    o = SW_BODY / 2 + CLEAR + 1.6
+    o = SW_BODY / 2 + SW_CLEAR + 1.6
     feats.append(b.box(sx - o, sx + o, sy - o, sy + o, sock_bottom, top, 'new'))
 
     for f in feats:
@@ -524,7 +534,7 @@ def build_dome(b):
     b.combine(outer, feats + b.pieces(lip), 'join')
 
     # ---- cuts ----
-    sw = b.box(sx - SW_BODY / 2 - CLEAR, sx + SW_BODY / 2 + CLEAR, sy - SW_BODY / 2 - CLEAR, sy + SW_BODY / 2 + CLEAR,
+    sw = b.box(sx - SW_BODY / 2 - SW_CLEAR, sx + SW_BODY / 2 + SW_CLEAR, sy - SW_BODY / 2 - SW_CLEAR, sy + SW_BODY / 2 + SW_CLEAR,
                sock_bottom - 1, PUCK_DEPTH - SHELL, 'new')
     b.combine(outer, [sw], 'cut')
     b.cyl_z(sx, sy, sw_bottom, 30, SW_CAP_D / 2 + 0.3, 'cut', outer)
@@ -533,6 +543,7 @@ def build_dome(b):
     for y0, y1 in bearing_spans():
         b.cyl_y(WAND_X, WAND_Z, (y0 + y1) / 2, y1 - y0 + 0.02, BEARING_R, 'cut', outer)
     b.cyl_y(WAND_X, WAND_Z, 0, PUCK_D + 20, WAND_PORT_R, 'cut', outer)
+    wand_port_funnels(b, outer)
     motor_cuts(b, outer)
     return outer
 
@@ -552,7 +563,38 @@ def build_wand_gear(b):
         (GEAR_ROOT_R, c1), (HUB_R, j1), (HUB_R, a1), (3.0, a1)]))
     b.combine(gear, [hub], 'join')
     b.prism_y([[to3(p) for p in hexagon(WAND_AF + WAND_FIT, 30)]], GEAR_Y, a1 - a0 + 2, 'cut', gear)
+    # 45 degree lead-ins on both ends of the hex, so the rod's end and corners get caught
+    rc = (WAND_AF + WAND_FIT) / math.sqrt(3)
+    for end, d in ((a0, 1), (a1, -1)):
+        cone = b.revolve_y(WAND_X, WAND_Z, poly_segs([
+            (0.5, end - d), (rc + WAND_LEAD + 1, end - d), (rc - 0.2, end + d * (WAND_LEAD + 0.2)),
+            (0.5, end + d * (WAND_LEAD + 0.2))]))
+        b.combine(gear, [cone], 'cut')
     return gear
+
+
+def wand_port_funnels(b, body):
+    """45 degree funnels where the rod comes in from outside at both ends, and on the
+    inside of the far port so the rod finds it after leaving the gear."""
+    rp = WAND_PORT_R
+    yw = math.sqrt(R * R - WAND_X * WAND_X)            # outside of the wall on the wand line
+    for s in (-1, 1):
+        y0 = s * (yw + 2)
+        y1 = s * (yw - WAND_FUNNEL)
+        cone = b.revolve_y(WAND_X, WAND_Z, poly_segs([
+            (0.5, y0), (rp + WAND_FUNNEL + 2, y0), (rp, y1), (0.5, y1)]))
+        b.combine(body, [cone], 'cut')
+    # inside the far port block
+    y0 = PORT_BLOCK_Y0
+    cone = b.revolve_y(WAND_X, WAND_Z, poly_segs([
+        (0.5, y0 - 1), (rp + WAND_FUNNEL + 1, y0 - 1), (rp, y0 + WAND_FUNNEL), (0.5, y0 + WAND_FUNNEL)]))
+    b.combine(body, [cone], 'cut')
+
+
+def port_block(b, z0, z1):
+    """Solid round the far wand port (the near one is inside the gear bearing block),
+    so the port is a clean hole with a funnel instead of a notch in a thin wall."""
+    return b.box(WAND_X - PORT_BLOCK_HALF_W, WAND_X + PORT_BLOCK_HALF_W, PORT_BLOCK_Y0, R + 1, z0, z1, 'new')
 
 
 def build_pinion(b):
@@ -570,7 +612,7 @@ def build_switch_plug(b):
     """Square plug pressed into the back of the switch socket. Two notches let the legs out."""
     sx, sy = SW_POS
     top = PUCK_DEPTH + SW_CAP_PROUD - SW_TOTAL_H
-    h = SW_BODY / 2 + CLEAR         # same as the socket: a press fit once printed
+    h = SW_BODY / 2 + SW_CLEAR      # same as the socket: a press fit once printed
     body = b.box(sx - h, sx + h, sy - h, sy + h, top - SW_PLUG_T, top, 'new', name='Switch plug')
     for side in (-1, 1):
         x0 = sx + side * h
@@ -578,14 +620,15 @@ def build_switch_plug(b):
     return body
 
 
-def usb_flat_y():
-    """The mount has a small flat at the bottom where the socket looks out."""
-    return math.sqrt(R * R - (USB_W / 2 + CLEAR + 2) ** 2)
-
-
 def usb_face_y():
-    """Front face of the socket: it sits behind a USB_FACE_T wall with a window for the plug."""
-    return usb_flat_y() - USB_FACE_T
+    """Front face of the socket. The mount stays round outside; the wall in front of the
+    socket is at least USB_FACE_T where the plug window meets the curve."""
+    return math.sqrt(R * R - (USB_WIN_W / 2) ** 2) - USB_FACE_T
+
+
+def usb_corner_wall():
+    """Thinnest bit of wall in front of the socket: at the pocket's corners."""
+    return math.sqrt(R * R - (USB_W / 2 + CLEAR) ** 2) - usb_face_y()
 
 
 def build_mount(b):
@@ -603,28 +646,33 @@ def build_mount(b):
     # The socket is a plain moulded block with no flange, so it's captive: a front wall
     # with a window for the plug, a back stop, and the tray back pressing down on it.
     s = USB_SIDE
-    fy = usb_flat_y()
     uy = usb_face_y()
     hw = USB_W / 2 + CLEAR
     back = uy - USB_DEPTH - 0.2
     zt = -(USB_T - USB_PINCH)
-    b.box(USB_X - hw - 2, USB_X + hw + 2, s * (back - 2), s * R, -H + 1, 0, 'join', body)
+    b.box(USB_X - hw - 2, USB_X + hw + 2, s * (back - 2), s * (ri + 1), -H + 1, 0, 'join', body)
     b.box(USB_X - hw, USB_X + hw, s * back, s * uy, zt, 1, 'cut', body)
     # window for the plug's overmould
     b.box(USB_X - USB_WIN_W / 2, USB_X + USB_WIN_W / 2, s * (uy - 0.5), s * (R + 1),
           zt / 2 - USB_WIN_H / 2, zt / 2 + USB_WIN_H / 2, 'cut', body)
     # slot in the back stop for the wires
     b.box(USB_X - 3, USB_X + 3, s * (back - 3), s * (back + 0.1), zt / 2 - 3, 1, 'cut', body)
-    # flat on the outside
-    b.box(USB_X - hw - 3, USB_X + hw + 3, s * fy, s * (R + 1), -H - 1, 1, 'cut', body)
 
     # clamp screw: M3 x 8 from the back, head on the web under the tray
     b.cyl_z(0, 0, -H - 1, H + 1 - MOUNT_WEB, M3_CB_D / 2, 'cut', body)
     b.cyl_z(0, 0, -H - 1, H + 2, M3_CLEAR / 2, 'cut', body)
     # Command strip pockets
+    x0, x1 = -STRIP_L / 2 - 0.5, STRIP_L / 2 + 0.5
     for s in (-1, 1):
-        b.box(-STRIP_L / 2 - 0.5, STRIP_L / 2 + 0.5, s * STRIP_Y - STRIP_W / 2 - 0.5, s * STRIP_Y + STRIP_W / 2 + 0.5,
-              -H - 1, -H + STRIP_RECESS, 'cut', body)
+        y0, y1 = s * STRIP_Y - STRIP_W / 2 - 0.5, s * STRIP_Y + STRIP_W / 2 + 0.5
+        b.box(x0, x1, y0, y1, -H - 1, -H + STRIP_RECESS, 'cut', body)
+        # our own supports: thin ribs under the pocket ceiling, touching only the ceiling,
+        # so the bridges are short and the ribs snap out with pliers
+        n = int(math.ceil((x1 - x0) / STRIP_RIB_PITCH))
+        for i in range(1, n):
+            x = x0 + (x1 - x0) * i / n
+            b.box(x - STRIP_RIB_W / 2, x + STRIP_RIB_W / 2, y0 + 0.4, y1 - 0.4, -H, -H + STRIP_RECESS + 0.01,
+                  'join', body)
     return body
 
 
@@ -730,11 +778,12 @@ def wall_list():
         ('pinion round the D bore', GEAR_ROOT_R - (MOTOR_SHAFT_D + PINION_FIT) / 2),
         ('gear bearing wall', BEARING_WALL),
         ('mount side wall', MOUNT_WALL),
-        ('mount wall in front of the USB socket', USB_FACE_T),
+        ('mount wall in front of the USB socket', min(USB_FACE_T, usb_corner_wall())),
+        ('switch socket wall', 1.6),
+        ('wand gear hub round the hex lead-in', HUB_R - (WAND_AC / 2 + WAND_FIT + WAND_LEAD)),
         ('mount web under the clamp screw', MOUNT_WEB),
         ('mount back under the strip pockets', MOUNT_BASE - STRIP_RECESS),
         ('mount post round the screw bore', MOUNT_POST_R - M3_CB_D / 2),
-        ('switch socket wall', 1.6),
     ]
 
 

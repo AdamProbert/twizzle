@@ -210,12 +210,14 @@ def overhangs(name, shape, limit_deg=50.0, min_area=0.5):
 
 
 def bridges(name, shape, min_area=0.5):
-    """Flat ceilings, with the shorter side of each (the span a bridge has to cross)."""
+    """Flat ceilings, with the span a bridge has to cross, estimated as 2 x area / perimeter
+    (the width of a strip; for a ceiling split up by support ribs, the gap between ribs)."""
     out = []
     for f, n in _down_faces(name, shape):
         if n.z <= -0.999 and f.Area() >= min_area:
+            per = sum(e.Length() for e in f.Edges())
             bb = f.BoundingBox()
-            out.append((round(min(bb.xlen, bb.ylen), 1), round(f.Area(), 1), (round(bb.xmin, 1), round(bb.ymin, 1), round(bb.zmin, 1))))
+            out.append((round(2 * f.Area() / per, 1), round(f.Area(), 1), (round(bb.xmin, 1), round(bb.ymin, 1), round(bb.zmin, 1))))
     return sorted(out, reverse=True)
 
 

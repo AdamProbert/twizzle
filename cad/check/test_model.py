@@ -10,7 +10,7 @@ import pytest
 
 from cqmodel import T, CQProbe, build, bridges, overhangs
 
-MAX_BRIDGE = 22.0           # mm; the Command strip pockets are 20 mm
+MAX_BRIDGE = 8.0            # mm; ribs keep the Command strip pocket ceilings short
 
 
 @pytest.fixture(scope='session')
