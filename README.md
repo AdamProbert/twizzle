@@ -4,7 +4,7 @@ Twizzle is a little white puck that twists the tilt wand on my office venetian b
 
 The wand is a 7 mm clear acrylic hex. It goes straight through the puck, and a gear on the wand is driven 1:1 by a gear on the motor. A full open or close takes about 40 seconds, which is fine for a blind.
 
-This repo has the Fusion 360 script that builds the case, the parts list, the wiring and the design sketches. The firmware isn't in here yet.
+This repo has the ESPHome firmware, the Fusion 360 script that builds the case, the parts list, the wiring and the design sketches.
 
 ## Hardware
 
@@ -35,6 +35,7 @@ To open it up, pull it off the wall (interlocking picture-hanging strips make th
 
 ## What's in here
 
+- `firmware/` is the ESPHome config. See [Flashing the firmware](#flashing-the-firmware).
 - `cad/fusion/Twizzle/` is the Fusion 360 script that builds every part. See [docs/printing.md](docs/printing.md) for how to run it, export the STLs and print them.
 - `cad/check/` builds the same parts in CadQuery to check fits, overhangs and print orientation without Fusion.
 - `docs/parts.md` is the parts list.
@@ -50,6 +51,14 @@ To open it up, pull it off the wall (interlocking picture-hanging strips make th
 3. Select Twizzle and click Run.
 
 It makes a new design with every part as its own component, in its assembled position. All the sizes are at the top of `Twizzle.py`. The ones marked `MEASURE` are guesses that should be checked before printing.
+
+## Flashing the firmware
+
+1. Copy `firmware/secrets.yaml.example` to `firmware/secrets.yaml` and fill it in. It's git-ignored.
+2. Install ESPHome (`uv tool install esphome`). On Windows, set `ESPHOME_ESP_IDF_PREFIX` to a short path like `E:\espidf`, or the toolchain hits the 260-character path limit.
+3. Plug in the C3's own USB (not the puck's USB-C socket) and run `esphome run firmware/twizzle.yaml`. After the first flash it updates over Wi-Fi.
+
+`open_turns` at the top of `twizzle.yaml` is a guess. Count the wand turns from closed to open on your blind and set it.
 
 ## Build log
 
