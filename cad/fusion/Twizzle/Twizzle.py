@@ -53,7 +53,6 @@ WAND_AF = 7.0               # MEASURE: across the flats
 WAND_AC = WAND_AF * 2 / math.sqrt(3)   # across the corners (8.08 for a 7.0 hex)
 WAND_FIT = 0.4              # extra on the gear's hex bore so the wand slides through
 WAND_LEAD = 1.2             # 45 degree lead-in on each end of the gear's hex bore
-WAND_FUNNEL = 2.5           # 45 degree funnel on the wand ports, so the rod finds its way in
 WAND_PORT_CLEAR = 1.5       # the case never touches the wand: the gear's journals carry it
 WAND_WALL_GAP = 50.0        # centre of the wand to the wall (Adam: ~5 cm)
 
@@ -77,9 +76,10 @@ GEAR_TEETH = 20
 GEAR_FACE = 6.0
 GEAR_ADDENDUM = 0.85        # x module; slightly short teeth print stronger tips
 GEAR_BACKLASH = 0.2
-GEAR_Y = -29.0              # centre of the gear pair along the wand (+y is up in Fusion, so the gears sit low)
+GEAR_Y = -26.5              # centre of the gear pair along the wand (+y is up in Fusion, so the gears sit low).
+                            # Far enough from the wall that the bottom bearing stays inside it (self-check: wand ports)
 HUB_R = 7.5                 # wand gear journals, one each side
-HUB_L = 4.0
+HUB_L = 3.5
 JOURNAL_CLEAR = 0.25        # per side, journal in its bearing
 GEAR_SIDE_GAP = 0.3         # gear to bearing face
 BEARING_WALL = 2.5
@@ -110,7 +110,7 @@ BOARD_HOLE_DY = 27.0        # MEASURE: hole spacing along the 32 mm side
 BOARD_HOLE_D = 3.0          # MEASURE: an M3 needs about 3.2
 BOARD_COMP_H = 9.0          # MEASURE: tallest part on the board (header pins / plug)
 BOARD_STANDOFF = 7.0        # floor to the underside of the board
-BOARD_CENTRE = (10.0, 16.0)
+BOARD_CENTRE = (9.0, 17.0)  # just clear of the motor's back stop
 
 # ESP32-C3 SuperMini
 C3_W = 18.0
@@ -179,8 +179,6 @@ TOOTH_CHAMFER = GEAR_TIP_R - GEAR_ROOT_R          # 45 degree chamfer on the wan
 WAND_PORT_R = WAND_AC / 2 + WAND_PORT_CLEAR
 BEARING_R = HUB_R + JOURNAL_CLEAR
 BEARING_HALF_W = BEARING_R + BEARING_WALL
-PORT_BLOCK_Y0 = 31.0                              # inner face of the solid round the far wand port
-PORT_BLOCK_HALF_W = 7.0
 MOUNT_H = WAND_WALL_GAP - WAND_Z - (STRIP_T - STRIP_RECESS)
 BOARD_Z = TRAY_FLOOR + BOARD_STANDOFF
 
@@ -413,7 +411,6 @@ def build_tray(b):
 
     # motor cradle (bottom half)
     feats.append(motor_block(b, fl - 0.5, WAND_Z))
-    feats.append(port_block(b, fl - 0.5, WAND_Z))
 
     # board standoffs: two with inserts, two with locating pins
     screws, pins = board_screw_holes()
@@ -450,7 +447,6 @@ def build_tray(b):
     for y0, y1 in bearing_spans():
         b.cyl_y(WAND_X, WAND_Z, (y0 + y1) / 2, y1 - y0 + 0.02, BEARING_R, 'cut', body)
     b.cyl_y(WAND_X, WAND_Z, 0, PUCK_D + 20, WAND_PORT_R, 'cut', body)
-    wand_port_funnels(b, body)
     # motor
     motor_cuts(b, body)
     # board: insert pockets
@@ -507,7 +503,6 @@ def build_dome(b):
         feats.append(f)
     # motor cap
     feats.append(motor_block(b, WAND_Z, top))
-    feats.append(port_block(b, WAND_Z, top))
     # button socket
     sx, sy = SW_POS
     sw_bottom = PUCK_DEPTH + SW_CAP_PROUD - SW_TOTAL_H
@@ -543,7 +538,6 @@ def build_dome(b):
     for y0, y1 in bearing_spans():
         b.cyl_y(WAND_X, WAND_Z, (y0 + y1) / 2, y1 - y0 + 0.02, BEARING_R, 'cut', outer)
     b.cyl_y(WAND_X, WAND_Z, 0, PUCK_D + 20, WAND_PORT_R, 'cut', outer)
-    wand_port_funnels(b, outer)
     motor_cuts(b, outer)
     return outer
 
@@ -571,30 +565,6 @@ def build_wand_gear(b):
             (0.5, end + d * (WAND_LEAD + 0.2))]))
         b.combine(gear, [cone], 'cut')
     return gear
-
-
-def wand_port_funnels(b, body):
-    """45 degree funnels where the rod comes in from outside at both ends, and on the
-    inside of the far port so the rod finds it after leaving the gear."""
-    rp = WAND_PORT_R
-    yw = math.sqrt(R * R - WAND_X * WAND_X)            # outside of the wall on the wand line
-    for s in (-1, 1):
-        y0 = s * (yw + 2)
-        y1 = s * (yw - WAND_FUNNEL)
-        cone = b.revolve_y(WAND_X, WAND_Z, poly_segs([
-            (0.5, y0), (rp + WAND_FUNNEL + 2, y0), (rp, y1), (0.5, y1)]))
-        b.combine(body, [cone], 'cut')
-    # inside the far port block
-    y0 = PORT_BLOCK_Y0
-    cone = b.revolve_y(WAND_X, WAND_Z, poly_segs([
-        (0.5, y0 - 1), (rp + WAND_FUNNEL + 1, y0 - 1), (rp, y0 + WAND_FUNNEL), (0.5, y0 + WAND_FUNNEL)]))
-    b.combine(body, [cone], 'cut')
-
-
-def port_block(b, z0, z1):
-    """Solid round the far wand port (the near one is inside the gear bearing block),
-    so the port is a clean hole with a funnel instead of a notch in a thin wall."""
-    return b.box(WAND_X - PORT_BLOCK_HALF_W, WAND_X + PORT_BLOCK_HALF_W, PORT_BLOCK_Y0, R + 1, z0, z1, 'new')
 
 
 def build_pinion(b):
@@ -822,6 +792,23 @@ def self_check(probe):
     f1 = f0 + MOTOR_FLAT_LEN
     on = GEAR_Y - GEAR_FACE / 2 >= f0 - 1e-6 and GEAR_Y + GEAR_FACE / 2 <= f1 + 1e-6
     res.append(('Gear centre distance', on, 'pinion %s on the shaft flats' % ('sits' if on else 'does NOT sit')))
+
+    # wand ports: a clean round hole, with case material all the way round it on the outside
+    # (catches a bearing bore or hub breaking out through the curved wall)
+    for s, where in ((-1, 'bottom'), (1, 'top')):
+        rr = WAND_PORT_R + 1.0
+        gaps = []
+        for i in range(16):
+            t = 2 * math.pi * i / 16
+            x = WAND_X + rr * math.cos(t)
+            z = WAND_Z + rr * math.sin(t)
+            y = s * (math.sqrt(R * R - x * x) - 0.4)
+            if abs(z - WAND_Z) < 0.05:
+                continue                      # on the seam itself
+            if not (probe.inside('Tray', x, y, z) or probe.inside('Dome', x, y, z)):
+                gaps.append(round(math.degrees(t)))
+        res.append(('Wand ports', not gaps, '%s port: %s' % (
+            where, 'round, solid all the way round' if not gaps else 'wall missing round the hole at %s degrees' % gaps)))
 
     # 4. bolts line up with inserts
     for f in fasteners():

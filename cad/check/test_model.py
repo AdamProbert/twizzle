@@ -24,7 +24,7 @@ def report(model):
     return T.self_check(CQProbe(parts, ref))
 
 
-@pytest.mark.parametrize('group', ['Interference', 'Wall thickness', 'Gear centre distance', 'Bolts and inserts'])
+@pytest.mark.parametrize('group', ['Interference', 'Wall thickness', 'Gear centre distance', 'Wand ports', 'Bolts and inserts'])
 def test_self_check(report, group):
     rows = [r for r in report if r[0] == group]
     assert rows, 'no %s checks ran' % group

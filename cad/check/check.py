@@ -9,6 +9,7 @@ part's print orientation, STLs in print orientation and a few renders.
 The same checks run as tests with `pytest cad/check`.
 """
 
+import math
 import os
 import sys
 
@@ -74,7 +75,7 @@ def render_all(parts, ref, out):
         cq.exporters.export(cq.Workplane().add(s), fn, tolerance=0.03, angularTolerance=0.15)
         files[k] = fn
 
-    def render(fn, names, pos, focal, up=(0, 0, 1), opacity=None):
+    def render(fn, names, pos, focal, up=(0, 0, 1), opacity=None, zoom=1.2):
         ren = vtk.vtkRenderer()
         ren.SetBackground(1, 1, 1)
         for n in names:
@@ -110,7 +111,8 @@ def render_all(parts, ref, out):
         cam.SetFocalPoint(*focal)
         cam.SetViewUp(*up)
         ren.ResetCamera()
-        cam.Zoom(1.2)
+        cam.SetFocalPoint(*focal)
+        cam.Zoom(zoom)
         rw = vtk.vtkRenderWindow()
         rw.SetOffScreenRendering(1)
         rw.AddRenderer(ren)
@@ -134,6 +136,10 @@ def render_all(parts, ref, out):
     render('6_mount_back.png', ['Mount'], (40, 60, -160), (0, 0, -15), up=(0, 1, 0))
     render('8_bottom.png', ['Dome', 'Tray', 'Mount', 'usb'], (30, -170, 60), (0, 0, 0), up=(0, 0, 1))
     render('9_top.png', ['Dome', 'Tray', 'Mount'], (30, 170, 60), (0, 0, 0), up=(0, 0, 1))
+    port = (T.WAND_X, -math.sqrt(T.R ** 2 - T.WAND_X ** 2), T.WAND_Z)
+    render('10_bottom_port.png', ['Dome', 'Tray', 'Mount'], (port[0] - 40, port[1] - 90, port[2] + 40), port, up=(0, 0, 1), zoom=4)
+    render('11_top_port.png', ['Dome', 'Tray', 'Mount'], (port[0] - 40, -port[1] + 90, port[2] + 40), (port[0], -port[1], port[2]),
+           up=(0, 0, 1), zoom=4)
     render('7_section_gear.png', ['Tray', 'Dome', 'Wand gear', 'Motor pinion', 'wand', 'motor'],
            (-160, -60, 60), (0, -25, 19), up=(0, 0, 1), opacity={'Dome': 0.35, 'Tray': 0.6})
 
