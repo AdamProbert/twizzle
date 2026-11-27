@@ -29,9 +29,9 @@ The full parts list, including the screws, is in [docs/parts.md](docs/parts.md).
 
 ## Mounting
 
-The wand hangs about 5 cm off the wall and is pulled about 30° to the left. The puck sits on a single 90 mm mount, the same size as the puck, so the whole thing reads as one drum. The mount has 72 ridges round its rim that key into grooves on the back of the tray, and two M3 screws from the back of the mount go into inserts in the tray. The angle between the puck and the mount is `MOUNT_TWIST` in the script (30° now, in 5° steps); to change it, reprint just the mount. Two Command strips stick it to the wall, and the USB-C socket lives in the bottom of the mount, so the cable runs down the wall behind it.
+The wand hangs about 5 cm off the wall and is pulled about 30° to the left. The puck sits on a single 90 mm mount, the same size as the puck, so the whole thing reads as one drum. The mount has 72 ridges round its rim that drop into grooves on the back of the tray (5° steps). Turn the puck to match the wand's angle on the bench, clamp it with one M3 screw from the back of the mount, then stick it to the wall with two Command strips. The USB-C socket lives in the bottom of the mount, so the cable runs down the wall behind it.
 
-To open it up, pull it off the wall (interlocking picture-hanging strips make that easy), take out the two mount screws, lift off the mount, and undo the three screws that hold the dome on.
+To open it up, pull it off the wall (interlocking picture-hanging strips make that easy), take out the centre screw, lift off the mount, and undo the three screws that hold the dome on.
 
 ## What's in here
 

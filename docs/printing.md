@@ -23,10 +23,10 @@ PLA, 0.4 mm nozzle, 0.2 mm layers. 3 walls and 20 % infill is plenty. Gears at 1
 
 ## Heat-set inserts
 
-Seven M3 inserts, all in 4.2 mm pockets (the PokePi coupon size that fitted perfectly):
+Six M3 inserts, all in 4.2 mm pockets (the PokePi coupon size that fitted perfectly):
 
 - 3 in the dome bosses, pressed in from the seam face
-- 2 in the back of the tray for the mount screws, pressed in from the back
+- 1 in the centre of the tray, pressed in from the back
 - 2 in the board standoffs, pressed in from the top
 
 The pockets are `INSERT_L + 1` deep. `INSERT_L` defaults to 5.7 mm; change it if yours are longer.

@@ -32,8 +32,8 @@ All M3, socket head.
 
 | Hardware | Qty | Where |
 | --- | --- | --- |
-| M3 heat-set inserts | 7 | 3 in the dome, 2 in the back of the tray for the mount, 2 in the board standoffs (4.2 mm pockets) |
+| M3 heat-set inserts | 6 | 3 in the dome, 1 in the tray centre, 2 in the board standoffs (4.2 mm pockets) |
 | M3 x 20 | 3 | From the back of the tray into the dome |
-| M3 x 8 | 2 | From the back of the mount into the tray |
+| M3 x 8 | 1 | From the back of the mount into the tray, sets the angle |
 | M3 x 6 | 2 | Driver board onto its standoffs |
 | Command strips | 2 | Mount to the wall. Picture-hanging (interlocking) strips let it come off the wall to open it up. |

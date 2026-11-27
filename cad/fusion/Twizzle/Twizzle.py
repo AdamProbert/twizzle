@@ -142,13 +142,7 @@ STRIP_Y = 13.0              # strip centre lines, above and below the middle
 MOUNT_WALL = 2.4
 MOUNT_BASE = 3.0
 MOUNT_FLANGE_R = 39.5       # inner edge of the top flange that carries the index ridges
-MOUNT_POST_R = 6.0          # posts for the two clamp screws
-MOUNT_SCREWS = [(11.0, 9.0), (-11.0, -9.0)]   # clamp screw positions, puck frame: open floor either
-                            # side of the centre (under the board, and left of the motor).
-                            # Opposite each other, so the strips can run either side of the line.
-MOUNT_TWIST = 30.0          # MEASURE: wand angle. The puck is turned this far relative to the mount,
-                            # so the mount (strips, USB) shows turned in Fusion. Change it and
-                            # reprint the mount; the tray stays the same.
+MOUNT_POST_R = 6.0          # centre post for the clamp screw
 MOUNT_WEB = 3.0             # screw head bears on this, under the tray
 RIDGES = 72                 # 5 degree steps
 RIDGE_R = (41.0, 44.0)
@@ -235,9 +229,8 @@ def fasteners():
         head = M3_HEAD_H + M3_CB_SINK
         out.append(dict(name='dome screw at (%g, %g)' % (x, y), x=x, y=y, length=20, dir=1, head=head,
                         tip=head + 20, entry=WAND_Z, part='Dome'))
-    for x, y in MOUNT_SCREWS:
-        out.append(dict(name='mount screw at (%g, %g)' % (x, y), x=x, y=y, length=8, dir=1, head=-MOUNT_WEB,
-                        tip=-MOUNT_WEB + 8, entry=0.0, part='Tray'))
+    out.append(dict(name='mount screw', x=0.0, y=0.0, length=8, dir=1, head=-MOUNT_WEB,
+                    tip=-MOUNT_WEB + 8, entry=0.0, part='Tray'))
     for hx, hy in board_screw_holes()[0]:
         head = BOARD_Z + 1.6
         out.append(dict(name='board screw at (%g, %g)' % (hx, hy), x=hx, y=hy, length=6, dir=-1, head=head,
@@ -432,9 +425,8 @@ def build_tray(b):
     for x, y in DOME_SCREWS:
         feats.append(b.cyl_z(x, y, fl - 0.5, WAND_Z - fl + 0.5, INSERT_BOSS_D / 2, 'new'))
 
-    # bosses for the two mount screw inserts, pressed in from the back
-    for x, y in MOUNT_SCREWS:
-        feats.append(b.cyl_z(x, y, fl - 0.5, centre_boss_top() - fl + 0.5, INSERT_BOSS_D / 2, 'new'))
+    # centre boss: insert for the mount screw, pressed in from the back
+    feats.append(b.cyl_z(0, 0, fl - 0.5, centre_boss_top() - fl + 0.5, INSERT_BOSS_D / 2, 'new'))
 
     # C3 SuperMini frame (a dab of hot glue holds the board in it)
     cx, cy = C3_CENTRE
@@ -464,9 +456,8 @@ def build_tray(b):
     for x, y in DOME_SCREWS:
         b.cyl_z(x, y, -1, WAND_Z + 2, M3_CLEAR / 2, 'cut', body)
         b.cyl_z(x, y, -1, 1 + M3_HEAD_H + M3_CB_SINK, M3_CB_D / 2, 'cut', body)
-    # mount screw inserts, from the back
-    for x, y in MOUNT_SCREWS:
-        b.cyl_z(x, y, -1, INSERT_DEPTH + 1, INSERT_D / 2, 'cut', body)
+    # mount screw insert, from the back
+    b.cyl_z(0, 0, -1, INSERT_DEPTH + 1, INSERT_D / 2, 'cut', body)
     # wires from the USB socket in the mount
     b.cyl_z(WIRE_HOLE[0], WIRE_HOLE[1], -1, fl + 2, WIRE_HOLE_D / 2, 'cut', body)
     # index grooves on the back (the mount's ridges drop into them)
@@ -618,9 +609,7 @@ def build_mount(b):
     body = b.revolve_z(poly_segs([(ri, -H), (R, -H), (R, 0), (MOUNT_FLANGE_R, 0),
                                   (MOUNT_FLANGE_R, -1.5), (ri, -1.5 - (ri - MOUNT_FLANGE_R))]), name='Mount')
     b.cyl_z(0, 0, -H, MOUNT_BASE, ri + 0.2, 'join', body)
-    posts = mount_posts()
-    for px, py in posts:
-        b.cyl_z(px, py, -H, H, MOUNT_POST_R, 'join', body)
+    b.cyl_z(0, 0, -H, H, MOUNT_POST_R, 'join', body)
     b.prism_z(ridge_wedges(), -0.01, RIDGE_H + 0.01, 'join', body)
 
     # USB-C socket cradle at the bottom: drops in from the top, the tray back pinches it
@@ -639,40 +628,22 @@ def build_mount(b):
     # slot in the back stop for the wires
     b.box(USB_X - 3, USB_X + 3, s * (back - 3), s * (back + 0.1), zt / 2 - 3, 1, 'cut', body)
 
-    # clamp screws: M3 x 8 from the back, heads on the post webs under the tray
-    for px, py in posts:
-        b.cyl_z(px, py, -H - 1, H + 1 - MOUNT_WEB, M3_CB_D / 2, 'cut', body)
-        b.cyl_z(px, py, -H - 1, H + 2, M3_CLEAR / 2, 'cut', body)
-    # Command strip pockets, either side of the line through the two screw holes
-    phi = math.atan2(posts[0][1], posts[0][0])
-    u = (math.cos(phi), math.sin(phi))           # along the strips
-    v = (-u[1], u[0])                            # across them
-    def rect(a0, a1, b0, b1):
-        return [(u[0] * a + v[0] * c, u[1] * a + v[1] * c) for a, c in ((a0, b0), (a1, b0), (a1, b1), (a0, b1))]
-    a0, a1 = -STRIP_L / 2 - 0.5, STRIP_L / 2 + 0.5
+    # clamp screw: M3 x 8 from the back, head on the web under the tray
+    b.cyl_z(0, 0, -H - 1, H + 1 - MOUNT_WEB, M3_CB_D / 2, 'cut', body)
+    b.cyl_z(0, 0, -H - 1, H + 2, M3_CLEAR / 2, 'cut', body)
+    # Command strip pockets
+    x0, x1 = -STRIP_L / 2 - 0.5, STRIP_L / 2 + 0.5
     for s in (-1, 1):
-        c0, c1 = s * STRIP_Y - STRIP_W / 2 - 0.5, s * STRIP_Y + STRIP_W / 2 + 0.5
-        b.prism_z([rect(a0, a1, c0, c1)], -H - 1, STRIP_RECESS + 1, 'cut', body)
+        y0, y1 = s * STRIP_Y - STRIP_W / 2 - 0.5, s * STRIP_Y + STRIP_W / 2 + 0.5
+        b.box(x0, x1, y0, y1, -H - 1, -H + STRIP_RECESS, 'cut', body)
         # our own supports: thin ribs under the pocket ceiling, touching only the ceiling,
         # so the bridges are short and the ribs snap out with pliers
-        n = int(math.ceil((a1 - a0) / STRIP_RIB_PITCH))
-        ribs = []
+        n = int(math.ceil((x1 - x0) / STRIP_RIB_PITCH))
         for i in range(1, n):
-            a = a0 + (a1 - a0) * i / n
-            ribs.append(rect(a - STRIP_RIB_W / 2, a + STRIP_RIB_W / 2, c0 + 0.4, c1 - 0.4))
-        b.prism_z(ribs, -H, STRIP_RECESS + 0.01, 'join', body)
+            x = x0 + (x1 - x0) * i / n
+            b.box(x - STRIP_RIB_W / 2, x + STRIP_RIB_W / 2, y0 + 0.4, y1 - 0.4, -H, -H + STRIP_RECESS + 0.01,
+                  'join', body)
     return body
-
-
-def rotate(p, deg):
-    a = math.radians(deg)
-    return (p[0] * math.cos(a) - p[1] * math.sin(a), p[0] * math.sin(a) + p[1] * math.cos(a))
-
-
-def mount_posts():
-    """The two clamp screws, in the mount's own frame (the mount is turned MOUNT_TWIST
-    relative to the puck, so its strips and USB socket stay square to the wall)."""
-    return [rotate(p, -MOUNT_TWIST) for p in MOUNT_SCREWS]
 
 
 def build_reference(b):
@@ -704,10 +675,8 @@ def build_reference(b):
     b.cyl_z(sx, sy, swb + 4, SW_TOTAL_H - 4, SW_CAP_D / 2, 'join', s)
     out['switch'] = s
     uy = usb_face_y()
-    ux0, ux1 = USB_X - USB_W / 2, USB_X + USB_W / 2
-    uy0, uy1 = USB_SIDE * (uy - USB_DEPTH), USB_SIDE * uy
-    out['usb'] = b.prism_z([[rotate(p, MOUNT_TWIST) for p in ((ux0, uy0), (ux1, uy0), (ux1, uy1), (ux0, uy1))]],
-                           -USB_T, USB_T, 'new', name='USB-C socket')   # it lives in the (turned) mount
+    out['usb'] = b.box(USB_X - USB_W / 2, USB_X + USB_W / 2, USB_SIDE * (uy - USB_DEPTH), USB_SIDE * uy, -USB_T, 0,
+                       'new', name='USB-C socket')
     # hardware: inserts and screws
     hw = []
     for f in fasteners():
@@ -736,17 +705,15 @@ PARTS = [
     ('Mount (print back-down)', build_mount),
     ('Reference parts (do not print)', build_reference),
 ]
-# parts built in their own frame and then turned about the puck's axis (degrees)
-PART_TURN = {'Mount (print back-down)': MOUNT_TWIST}
 
 
 def hardware_summary():
-    return ('Mount to tray: 2 x M3 x 8 socket head from the back into inserts\n'
+    return ('Mount to tray: 1 x M3 x 8 socket head from the back into an insert\n'
             'Dome to tray: 3 x M3 x 20 socket head from the back into inserts\n'
             'Board: 2 x M3 x 6 into inserts (the other two corners sit on pins)\n'
-            'Heat-set inserts: 7 x M3 (%.1f mm pockets)\n'
+            'Heat-set inserts: 6 x M3 (%.1f mm pockets)\n'
             'Motor: snip the ears; the tray and dome clamp it, no ties\n'
-            'Mount turned %g deg to the puck, height %.1f mm' % (INSERT_D, MOUNT_TWIST, MOUNT_H))
+            'Mount height: %.1f mm' % (INSERT_D, MOUNT_H))
 
 
 # ---------------------------------------------------------------------------
@@ -1124,16 +1091,11 @@ def run(context):
         printed = {}
         everything = []
         for name, fn in PARTS:
-            place = adsk.core.Matrix3D.create()
-            if name in PART_TURN:
-                place.setToRotation(math.radians(PART_TURN[name]), adsk.core.Vector3D.create(0, 0, 1),
-                                    adsk.core.Point3D.create(0, 0, 0))
-            occ = root.occurrences.addNewComponent(place)
+            occ = root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
             occ.component.name = name
             out = fn(FusionBuilder(occ.component))
             if not isinstance(out, dict):
-                # the assembly-context copy, so the checks see turned parts where they really are
-                printed[name.split(' (')[0]] = out.createForAssemblyContext(occ)
+                printed[name.split(' (')[0]] = out
             for j in range(occ.component.bRepBodies.count):
                 body = occ.component.bRepBodies.item(j)
                 if body.name not in ('tray envelope', 'dome void', 'wall'):
