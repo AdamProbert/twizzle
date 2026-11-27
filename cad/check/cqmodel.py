@@ -47,9 +47,25 @@ class CQBuilder:
             target.shape = target.shape.fuse(shape).clean()
         elif op == 'cut':
             target.shape = target.shape.cut(shape).clean()
+            self._split(target)
         elif op == 'int':
             target.shape = target.shape.intersect(shape).clean()
+            self._split(target)
         return target
+
+    def _split(self, target):
+        """Do what Fusion does when a cut splits a body: the extra pieces become
+        new bodies called 'name (1)', 'name (2)'..., which the part code has to handle."""
+        solids = target.shape.Solids()
+        if len(solids) < 2 or target not in self.bodies:
+            return
+        solids = sorted(solids, key=lambda s: -s.Volume())
+        target.shape = solids[0]
+        for i, s in enumerate(solids[1:], 1):
+            self.bodies.append(Body(s, '%s (%d)' % (target.name, i)))
+
+    def pieces(self, body):
+        return [b for b in self.bodies if b is body or b.name.startswith(body.name + ' (')]
 
     def cyl_z(self, x, y, z0, h, r, op='new', target=None, name=None):
         if h < 0:
@@ -112,13 +128,17 @@ class CQBuilder:
 
 def build():
     """Returns ({printed part: shape}, {reference name: Body or [Body]})."""
-    parts, ref = {}, {}
+    parts, ref, stray = {}, {}, []
     for name, fn in T.PARTS:
-        out = fn(CQBuilder(name))
+        b = CQBuilder(name)
+        out = fn(b)
         if isinstance(out, dict):
             ref = out
-        else:
-            parts[name.split(' (')[0]] = out.shape
+            continue
+        parts[name.split(' (')[0]] = out.shape
+        # anything else left in a printed part's component is a body Fusion would show too
+        stray += [x for x in b.bodies if x is not out]
+    ref['stray bodies'] = stray
     return parts, ref
 
 

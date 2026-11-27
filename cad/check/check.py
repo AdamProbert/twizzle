@@ -63,6 +63,8 @@ def render_all(parts, ref, out):
         if k == 'wall':
             continue
         if isinstance(v, list):
+            if not v:
+                continue
             shapes[k] = cq.Compound.makeCompound([b.shape for b in v])
         else:
             shapes[k] = v.shape

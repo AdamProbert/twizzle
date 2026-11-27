@@ -47,6 +47,12 @@ def test_prints_without_supports(model, part):
     assert not long, 'bridges longer than %g mm: %s' % (MAX_BRIDGE, long)
 
 
+def test_no_stray_bodies(model):
+    """A cut that splits a body leaves extra bodies in Fusion; they must all get joined back."""
+    stray = [b.name for b in model[1]['stray bodies']]
+    assert not stray, 'left over in the printed parts: %s' % stray
+
+
 def test_wand_wall_gap():
     gap = (T.STRIP_T - T.STRIP_RECESS) + T.MOUNT_H + T.WAND_Z
     assert abs(gap - T.WAND_WALL_GAP) < 1e-6

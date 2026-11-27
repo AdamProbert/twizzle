@@ -384,6 +384,7 @@ def ridge_wedges(grow=0.0):
 #   revolve_z(segs)                   closed (r, z) profile round the z axis
 #   revolve_y(cx, cz, segs)           closed (r, y) profile round a y axis at (cx, cz)
 #   combine(target, tools, op, keep=False)
+#   pieces(body)                      the body plus any bits a cut split off it
 # ---------------------------------------------------------------------------
 
 def screw_pillar(b, body, x, y):
@@ -519,7 +520,8 @@ def build_dome(b):
     for s in (-1, 1):
         b.box(WAND_X - GEAR_TIP_R - 2, WAND_X + GEAR_TIP_R + 2, s * 25, s * (R + 5),
               WAND_Z - LIP_H - 1, WAND_Z + 10, 'cut', lip)
-    b.combine(outer, feats + [lip], 'join')
+    # those cuts split the ring in two; Fusion makes each piece its own body
+    b.combine(outer, feats + b.pieces(lip), 'join')
 
     # ---- cuts ----
     sw = b.box(sx - SW_BODY / 2 - CLEAR, sx + SW_BODY / 2 + CLEAR, sy - SW_BODY / 2 - CLEAR, sy + SW_BODY / 2 + CLEAR,
@@ -979,6 +981,16 @@ class FusionBuilder:
         if op != 'new':
             inp.participantBodies = [target]
         return self._finish(rv.add(inp), op, target, name)
+
+    def pieces(self, body):
+        """A cut that splits a body leaves the extra pieces as new bodies named 'name (1)' and so on."""
+        base = body.name
+        out = []
+        for j in range(self.c.bRepBodies.count):
+            b = self.c.bRepBodies.item(j)
+            if b.name == base or b.name.startswith(base + ' ('):
+                out.append(b)
+        return out
 
     def combine(self, target, tools, op, keep=False):
         cf = self.c.features.combineFeatures
