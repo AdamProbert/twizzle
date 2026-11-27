@@ -135,6 +135,10 @@ def build():
         if isinstance(out, dict):
             ref = out
             continue
+        turn = T.PART_TURN.get(name, 0.0)
+        if turn:
+            for x in b.bodies:
+                x.shape = x.shape.rotate(cq.Vector(0, 0, 0), cq.Vector(0, 0, 1), turn)
         parts[name.split(' (')[0]] = out.shape
         # anything else left in a printed part's component is a body Fusion would show too
         stray += [x for x in b.bodies if x is not out]
