@@ -52,6 +52,9 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
+  # The C3 SuperMini's antenna can't cope with full power and fails to
+  # authenticate ("Auth Expired"). 8.5 dB is the usual fix.
+  output_power: 8.5dB
   ap:
     ssid: "${name} fallback"
 
